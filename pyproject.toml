@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sparsehydro"
+version = "0.1.0"
+description = "Interface specifications for parsimonious hydrological models"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Caleb Buahin" }]
+keywords = ["hydrology", "parsimonious", "model", "calibration", "pytorch"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Hydrology",
+]
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+]
+
+[project.optional-dependencies]
+torch = ["torch>=2.0"]
+docs = [
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov",
+    "sparsehydro[docs]",
+]
+
+[project.urls]
+Homepage = "https://github.com/MSDGC-SWM/sparsehydro"
+Repository = "https://github.com/MSDGC-SWM/sparsehydro"
+Documentation = "https://MSDGC-SWM.github.io/sparsehydro"
+Issues = "https://github.com/MSDGC-SWM/sparsehydro/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sparsehydro"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "--cov=sparsehydro --cov-report=term-missing --cov-report=xml"
+
+[tool.coverage.run]
+source = ["sparsehydro"]

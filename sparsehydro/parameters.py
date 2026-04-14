@@ -1,0 +1,213 @@
+"""Typed parameter classes with boundary enforcement for sparsehydro models.
+
+Parameters are the primary calibration handles exposed by a model.  Each
+parameter carries its name, current value(s), and the permissible range so
+that calibration algorithms can operate in a well-defined search space.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+
+
+@dataclass
+class ScalarParameter:
+    """A named scalar parameter with lower and upper bounds.
+
+    :param name: Unique identifier for the parameter within a model.
+    :type name: str
+    :param value: Current parameter value.
+    :type value: float
+    :param lower_bound: Minimum permissible value (inclusive).
+    :type lower_bound: float
+    :param upper_bound: Maximum permissible value (inclusive).
+    :type upper_bound: float
+    :param units: Physical units (informational only).
+    :type units: str
+    :param description: Human-readable description (informational only).
+    :type description: str
+
+    :raises ValueError: If ``lower_bound > upper_bound``.
+
+    Example::
+
+        p = ScalarParameter("k", value=0.5, lower_bound=0.0, upper_bound=1.0)
+        assert p.is_valid()
+        assert p.normalize() == 0.5
+    """
+
+    name: str
+    value: float
+    lower_bound: float
+    upper_bound: float
+    units: str = ""
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        if self.lower_bound > self.upper_bound:
+            raise ValueError(
+                f"Parameter '{self.name}': lower_bound ({self.lower_bound}) "
+                f"must be <= upper_bound ({self.upper_bound})."
+            )
+
+    def is_valid(self) -> bool:
+        """Return ``True`` if ``value`` lies within ``[lower_bound, upper_bound]``.
+
+        :returns: ``True`` when the value satisfies the bounds constraint.
+        :rtype: bool
+        """
+        return self.lower_bound <= self.value <= self.upper_bound
+
+    def normalize(self) -> float:
+        """Return ``value`` mapped linearly to ``[0, 1]`` within the bounds.
+
+        Returns ``0.0`` when ``lower_bound == upper_bound``.
+
+        :returns: Normalized value in ``[0, 1]``.
+        :rtype: float
+        """
+        span = self.upper_bound - self.lower_bound
+        if span == 0.0:
+            return 0.0
+        return (self.value - self.lower_bound) / span
+
+    def clamp(self) -> ScalarParameter:
+        """Return a copy of this parameter with ``value`` clamped to the bounds.
+
+        :returns: New :class:`ScalarParameter` with value in
+            ``[lower_bound, upper_bound]``.
+        :rtype: ScalarParameter
+        """
+        return ScalarParameter(
+            name=self.name,
+            value=float(np.clip(self.value, self.lower_bound, self.upper_bound)),
+            lower_bound=self.lower_bound,
+            upper_bound=self.upper_bound,
+            units=self.units,
+            description=self.description,
+        )
+
+
+@dataclass
+class VectorParameter:
+    """A named vector parameter with element-wise lower and upper bounds.
+
+    A scalar supplied for ``lower_bounds`` or ``upper_bounds`` is broadcast to
+    match the length of ``values``.
+
+    :param name: Unique identifier for the parameter within a model.
+    :type name: str
+    :param values: 1-D array of current parameter values.
+    :type values: numpy.ndarray
+    :param lower_bounds: 1-D array of lower bounds, one per element.
+        A scalar is broadcast to match the length of ``values``.
+    :type lower_bounds: numpy.ndarray
+    :param upper_bounds: 1-D array of upper bounds, one per element.
+        A scalar is broadcast to match the length of ``values``.
+    :type upper_bounds: numpy.ndarray
+    :param units: Physical units (informational only).
+    :type units: str
+    :param description: Human-readable description (informational only).
+    :type description: str
+
+    :raises ValueError: If ``values`` is not 1-D, if the bounds arrays do not
+        match the length of ``values`` after broadcasting, or if any
+        ``lower_bound > upper_bound``.
+
+    Example::
+
+        import numpy as np
+        p = VectorParameter("beta", values=[0.2, 0.8],
+                            lower_bounds=0.0, upper_bounds=1.0)
+        assert p.is_valid()
+        np.testing.assert_allclose(p.normalize(), [0.2, 0.8])
+    """
+
+    name: str
+    values: np.ndarray
+    lower_bounds: np.ndarray
+    upper_bounds: np.ndarray
+    units: str = ""
+    description: str = ""
+
+    def __post_init__(self) -> None:
+        self.values = np.asarray(self.values, dtype=float)
+        self.lower_bounds = np.asarray(self.lower_bounds, dtype=float)
+        self.upper_bounds = np.asarray(self.upper_bounds, dtype=float)
+
+        if self.values.ndim != 1:
+            raise ValueError(
+                f"Parameter '{self.name}': values must be a 1-D array; "
+                f"got shape {self.values.shape}."
+            )
+
+        n = len(self.values)
+
+        if self.lower_bounds.ndim == 0:
+            self.lower_bounds = np.full(n, float(self.lower_bounds))
+        if self.upper_bounds.ndim == 0:
+            self.upper_bounds = np.full(n, float(self.upper_bounds))
+
+        if len(self.lower_bounds) != n:
+            raise ValueError(
+                f"Parameter '{self.name}': lower_bounds length ({len(self.lower_bounds)}) "
+                f"does not match values length ({n})."
+            )
+        if len(self.upper_bounds) != n:
+            raise ValueError(
+                f"Parameter '{self.name}': upper_bounds length ({len(self.upper_bounds)}) "
+                f"does not match values length ({n})."
+            )
+        if np.any(self.lower_bounds > self.upper_bounds):
+            bad = np.where(self.lower_bounds > self.upper_bounds)[0].tolist()
+            raise ValueError(
+                f"Parameter '{self.name}': lower_bound > upper_bound at indices {bad}."
+            )
+
+    @property
+    def size(self) -> int:
+        """Number of elements in the parameter vector.
+
+        :rtype: int
+        """
+        return len(self.values)
+
+    def is_valid(self) -> bool:
+        """Return ``True`` if all values lie within their respective bounds.
+
+        :returns: ``True`` when every element satisfies its bounds constraint.
+        :rtype: bool
+        """
+        return bool(
+            np.all(self.values >= self.lower_bounds)
+            and np.all(self.values <= self.upper_bounds)
+        )
+
+    def normalize(self) -> np.ndarray:
+        """Return values mapped element-wise to ``[0, 1]`` within the bounds.
+
+        Elements with ``lower_bound == upper_bound`` are mapped to ``0.0``.
+
+        :returns: Array of normalized values, each in ``[0, 1]``.
+        :rtype: numpy.ndarray
+        """
+        span = self.upper_bounds - self.lower_bounds
+        span = np.where(span == 0.0, 1.0, span)
+        return (self.values - self.lower_bounds) / span
+
+    def clamp(self) -> VectorParameter:
+        """Return a copy with all values clamped element-wise to their bounds.
+
+        :returns: New :class:`VectorParameter` with every value within its bounds.
+        :rtype: VectorParameter
+        """
+        return VectorParameter(
+            name=self.name,
+            values=np.clip(self.values, self.lower_bounds, self.upper_bounds).copy(),
+            lower_bounds=self.lower_bounds.copy(),
+            upper_bounds=self.upper_bounds.copy(),
+            units=self.units,
+            description=self.description,
+        )
