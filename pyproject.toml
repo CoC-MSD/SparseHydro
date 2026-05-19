@@ -28,6 +28,11 @@ dependencies = [
 
 [project.optional-dependencies]
 torch = ["torch>=2.0"]
+rdii = [
+    "pymoo>=0.6",
+    "plotly>=5.0",
+    "scipy>=1.10",
+]
 docs = [
     "sphinx>=7.0",
     "sphinx-rtd-theme>=2.0",
@@ -36,6 +41,11 @@ dev = [
     "pytest>=7.0",
     "pytest-cov",
     "sparsehydro[docs]",
+    "sparsehydro[rdii]",
+]
+all = [
+    "sparsehydro[torch]",
+    "sparsehydro[rdii]",
 ]
 
 [project.urls]
