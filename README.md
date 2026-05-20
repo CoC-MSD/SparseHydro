@@ -3,8 +3,8 @@
 **sparsehydro** provides abstract interfaces and utilities for building *parsimonious*
 (sparse-parameter) hydrological models in Python, with a focus on stormwater systems.
 
-[![Tests](https://github.com/cbuahin/sparsehydro/actions/workflows/tests.yml/badge.svg)](https://github.com/cbuahin/sparsehydro/actions/workflows/tests.yml)
-[![Docs](https://github.com/cbuahin/sparsehydro/actions/workflows/docs.yml/badge.svg)](https://cbuahin.github.io/sparsehydro)
+[![Tests](https://github.com/MSDGC-SWM/sparsehydro/actions/workflows/tests.yml/badge.svg)](https://github.com/MSDGC-SWM/sparsehydro/actions/workflows/tests.yml)
+[![Docs](https://github.com/MSDGC-SWM/sparsehydro/actions/workflows/docs.yml/badge.svg)](https://MSDGC-SWM.github.io/sparsehydro)
 [![PyPI](https://img.shields.io/pypi/v/sparsehydro)](https://pypi.org/project/sparsehydro/)
 [![Python](https://img.shields.io/pypi/pyversions/sparsehydro)](https://pypi.org/project/sparsehydro/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)

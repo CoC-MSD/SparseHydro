@@ -153,7 +153,7 @@ try:
 
 except ImportError:
 
-    class NSGAIISolver:  # type: ignore[no-redef]
+    class _NSGAIISolverStub:
         """Placeholder — requires ``pymoo``.
 
         Install with::
@@ -167,8 +167,10 @@ except ImportError:
                 "Install with: pip install sparsehydro[rdii]"
             )
 
-        def solve(self, problem) -> None:  # type: ignore[misc]
+        def solve(self, problem) -> None:
             raise ImportError(
                 "pymoo is required for NSGAIISolver. "
                 "Install with: pip install sparsehydro[rdii]"
             )
+
+    NSGAIISolver = _NSGAIISolverStub  # type: ignore[assignment, misc]

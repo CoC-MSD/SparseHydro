@@ -1,0 +1,228 @@
+/* Custom CSS for sparsehydro Documentation */
+
+/* Color scheme */
+:root {
+    --sparsehydro-primary: #2c5f99;      /* Professional blue */
+    --sparsehydro-secondary: #4a7ba7;    /* Light blue */
+    --sparsehydro-accent: #e67e22;       /* Accent orange */
+    --sparsehydro-dark: #1a1a1a;         /* Dark text */
+    --sparsehydro-light: #f8f9fa;        /* Light background */
+    --sparsehydro-success: #27ae60;      /* Success green */
+}
+
+/* Header styling */
+.navbar-brand {
+    font-weight: 600;
+    color: var(--sparsehydro-primary) !important;
+}
+
+/* Sidebar styling */
+.bd-sidebar {
+    background-color: var(--sparsehydro-light);
+}
+
+.bd-sidebar .nav-link {
+    color: var(--sparsehydro-dark);
+    border-left: 3px solid transparent;
+    transition: all 0.3s ease;
+}
+
+.bd-sidebar .nav-link:hover {
+    border-left-color: var(--sparsehydro-accent);
+    background-color: rgba(44, 95, 153, 0.05);
+}
+
+.bd-sidebar .nav-link.active {
+    border-left-color: var(--sparsehydro-primary);
+    background-color: rgba(44, 95, 153, 0.1);
+    font-weight: 600;
+}
+
+/* Code blocks */
+div.highlight {
+    border-left: 3px solid var(--sparsehydro-primary);
+    background-color: #f8f9fa;
+    border-radius: 4px;
+}
+
+pre {
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+}
+
+code {
+    background-color: rgba(44, 95, 153, 0.1);
+    color: var(--sparsehydro-primary);
+    padding: 0.2em 0.4em;
+    border-radius: 3px;
+    font-size: 0.9em;
+}
+
+/* Headers */
+h1 {
+    color: var(--sparsehydro-primary);
+    border-bottom: 3px solid var(--sparsehydro-accent);
+    padding-bottom: 0.5rem;
+}
+
+h2 {
+    color: var(--sparsehydro-primary);
+    border-bottom: 2px solid var(--sparsehydro-secondary);
+    padding-bottom: 0.3rem;
+}
+
+h3, h4, h5, h6 {
+    color: var(--sparsehydro-secondary);
+}
+
+/* Links */
+a {
+    color: var(--sparsehydro-primary);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+a:hover {
+    color: var(--sparsehydro-accent);
+    text-decoration: underline;
+}
+
+/* Tables */
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 1rem 0;
+}
+
+th {
+    background-color: var(--sparsehydro-primary);
+    color: white;
+    padding: 0.75rem;
+    text-align: left;
+    font-weight: 600;
+}
+
+td {
+    padding: 0.75rem;
+    border-bottom: 1px solid #ddd;
+}
+
+tr:hover {
+    background-color: rgba(44, 95, 153, 0.05);
+}
+
+/* Admonitions */
+.admonition {
+    border-left: 4px solid var(--sparsehydro-primary);
+    background-color: rgba(44, 95, 153, 0.05);
+    padding: 1rem;
+    margin: 1rem 0;
+    border-radius: 4px;
+}
+
+.admonition-title {
+    font-weight: 600;
+    color: var(--sparsehydro-primary);
+    margin-bottom: 0.5rem;
+}
+
+.admonition.note {
+    border-left-color: var(--sparsehydro-secondary);
+}
+
+.admonition.warning {
+    border-left-color: var(--sparsehydro-accent);
+    background-color: rgba(230, 126, 34, 0.05);
+}
+
+.admonition.tip {
+    border-left-color: var(--sparsehydro-success);
+    background-color: rgba(39, 174, 96, 0.05);
+}
+
+/* API documentation */
+.sig {
+    background-color: var(--sparsehydro-light);
+    border-left: 3px solid var(--sparsehydro-primary);
+    padding: 0.5rem;
+    margin: 0.5rem 0;
+    border-radius: 4px;
+}
+
+.sig-name {
+    color: var(--sparsehydro-primary);
+    font-weight: 600;
+}
+
+/* Footnotes and citations */
+.footnote, .citation {
+    font-size: 0.9em;
+    color: #666;
+}
+
+/* Version badge */
+.version {
+    background-color: var(--sparsehydro-primary);
+    color: white;
+    padding: 0.2rem 0.5rem;
+    border-radius: 3px;
+    font-size: 0.85em;
+    font-weight: 600;
+}
+
+/* Footer */
+.footer {
+    border-top: 2px solid var(--sparsehydro-primary);
+    padding-top: 1rem;
+    margin-top: 2rem;
+    color: #666;
+}
+
+/* Search box */
+.search-input {
+    border: 2px solid var(--sparsehydro-light);
+    border-radius: 4px;
+    transition: border-color 0.3s ease;
+}
+
+.search-input:focus {
+    border-color: var(--sparsehydro-primary);
+    outline: none;
+}
+
+/* Buttons */
+.btn-primary {
+    background-color: var(--sparsehydro-primary);
+    border-color: var(--sparsehydro-primary);
+}
+
+.btn-primary:hover {
+    background-color: var(--sparsehydro-secondary);
+    border-color: var(--sparsehydro-secondary);
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    h1 {
+        font-size: 1.75rem;
+    }
+
+    h2 {
+        font-size: 1.5rem;
+    }
+}
+
+/* Print styles */
+@media print {
+    .bd-sidebar,
+    .navbar,
+    .footer {
+        display: none;
+    }
+
+    a {
+        color: var(--sparsehydro-dark);
+        text-decoration: none;
+    }
+}

@@ -9,7 +9,7 @@ description = "Interface specifications for parsimonious hydrological models"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-authors = [{ name = "Caleb Buahin" }]
+authors = [{ name = "Caleb Buahin", email = "cbuahin@hazenandsawyer.com" }]
 keywords = ["hydrology", "parsimonious", "model", "calibration", "pytorch"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -33,9 +33,14 @@ rdii = [
     "plotly>=5.0",
     "scipy>=1.10",
 ]
+platypus = [
+    "platypus-opt>=1.0",
+]
 docs = [
     "sphinx>=7.0",
-    "sphinx-rtd-theme>=2.0",
+    "pydata-sphinx-theme>=0.15",
+    "myst-parser>=3.0",
+    "sphinx-design>=0.5",
 ]
 dev = [
     "pytest>=7.0",
@@ -46,6 +51,7 @@ dev = [
 all = [
     "sparsehydro[torch]",
     "sparsehydro[rdii]",
+    "sparsehydro[platypus]",
 ]
 
 [project.urls]

@@ -19,6 +19,7 @@ Public API
 +----------------------------+------------------------------------------+
 | :class:`ISolver`           | Abstract solver interface                |
 | :class:`NSGAIISolver`      | NSGA-II (requires pymoo)                 |
+| :class:`PlatypusSolver`    | Any Platypus algorithm (requires platypus-opt) |
 | :class:`ScipySolver`       | SciPy single-objective (requires scipy)  |
 +----------------------------+------------------------------------------+
 """
@@ -26,7 +27,7 @@ Public API
 from .objectives import IObjective, KGE, MAE, MSE, RMSE, NashSutcliffe, PeakWeightedMSE
 from .problem import CalibrationProblem
 from .result import CalibrationResult, GenerationRecord, _identify_pareto
-from .solvers import ISolver, NSGAIISolver, ScipySolver
+from .solvers import ISolver, NSGAIISolver, PlatypusSolver, ScipySolver
 
 __all__ = [
     # Objectives
@@ -45,5 +46,6 @@ __all__ = [
     # Solvers
     "ISolver",
     "NSGAIISolver",
+    "PlatypusSolver",
     "ScipySolver",
 ]
