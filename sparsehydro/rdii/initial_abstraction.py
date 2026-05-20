@@ -1,0 +1,344 @@
+"""Physics-based Initial Abstraction (IA) recovery and depletion model.
+
+Tracks available soil/vadose-zone storage capacity over time.  During dry
+intervals the capacity recovers toward ``ia_max`` via an exponential approach
+whose rate is temperature-dependent (capturing ET and drainage).  During
+rainfall the capacity is depleted exponentially per mm of input.  Recovery is
+suppressed entirely below ``T_freeze``, producing emergent seasonal RDII
+behaviour from a single parameter set.
+
+Key equations
+-------------
+Recovery (dry interval Δt, temperature T):
+
+    k_rec(T) = k0 + kT * exp(θ * (T - T_ref))   if T >= T_freeze
+             = 0                                   if T < T_freeze
+
+    IA_avail(t+Δt) = IA_max - (IA_max - IA_avail(t)) * exp(-k_rec(T) * Δt)
+
+Depletion (rainfall pulse ΔP mm):
+
+    IA_avail(t+Δt) = IA_avail(t) * exp(-k_dep * ΔP)
+
+Rainfall excess:
+
+    P_excess = max(0, ΔP - IA_avail(t))   [then update IA_avail]
+"""
+
+from __future__ import annotations
+
+import math
+
+import numpy as np
+import pandas as pd
+
+from ..enums import ModelState
+from ..interfaces import IModel
+from ..parameters import ScalarParameter
+
+
+class IAModel(IModel):
+    """Stateful initial-abstraction model implementing the :class:`~sparsehydro.interfaces.IModel` lifecycle.
+
+    Constructor arguments seed the :meth:`initialize` parameter registry.
+    After :meth:`initialize`, calibratable values live in the scalar-parameter
+    registry and are kept in sync with the instance attributes used by the
+    physics methods.
+
+    :param ia_max: Maximum abstraction capacity [mm].
+    :param k0: Base recovery rate constant [1/hr].
+    :param kT: Temperature-dependent recovery coefficient [1/hr].
+    :param theta: Temperature sensitivity exponent [1/°C].
+    :param T_ref: Reference temperature [°C].
+    :param k_dep: Depletion rate constant [1/mm].
+    :param T_freeze: Temperature below which recovery is suppressed [°C].
+    """
+
+    model_name = "initial-abstraction"
+
+    def __init__(
+        self,
+        ia_max: float = 5.0,
+        k0: float = 0.05,
+        kT: float = 0.02,
+        theta: float = 0.1,
+        T_ref: float = 20.0,
+        k_dep: float = 0.3,
+        T_freeze: float = 0.0,
+    ) -> None:
+        super().__init__()
+        self.ia_max = float(ia_max)
+        self.k0 = float(k0)
+        self.kT = float(kT)
+        self.theta = float(theta)
+        self.T_ref = float(T_ref)
+        self.k_dep = float(k_dep)
+        self.T_freeze = float(T_freeze)
+        self.ia_avail: float = self.ia_max
+        self._prepared_df: pd.DataFrame | None = None
+
+    # ------------------------------------------------------------------
+    # IModel lifecycle
+    # ------------------------------------------------------------------
+
+    def initialize(self) -> None:
+        """Register all IA scalar parameters and advance to INITIALIZED."""
+        self.register_scalar_parameter(ScalarParameter(
+            "ia_max", value=self.ia_max, lower_bound=0.1, upper_bound=50.0,
+            units="mm", description="Maximum initial abstraction capacity",
+        ))
+        self.register_scalar_parameter(ScalarParameter(
+            "ia_k0", value=self.k0, lower_bound=0.001, upper_bound=1.0,
+            units="1/hr", description="Base recovery rate (gravity drainage)",
+        ))
+        self.register_scalar_parameter(ScalarParameter(
+            "ia_kT", value=self.kT, lower_bound=0.0, upper_bound=0.5,
+            units="1/hr", description="Temperature-sensitive recovery coefficient",
+        ))
+        self.register_scalar_parameter(ScalarParameter(
+            "ia_theta", value=self.theta, lower_bound=0.0, upper_bound=0.5,
+            units="1/degC", description="Temperature sensitivity exponent",
+        ))
+        self.register_scalar_parameter(ScalarParameter(
+            "ia_T_ref", value=self.T_ref, lower_bound=0.0, upper_bound=30.0,
+            units="degC", description="Reference temperature for ET scaling",
+        ))
+        self.register_scalar_parameter(ScalarParameter(
+            "ia_k_dep", value=self.k_dep, lower_bound=0.01, upper_bound=5.0,
+            units="1/mm", description="Depletion rate per mm of rainfall",
+        ))
+        self.register_scalar_parameter(ScalarParameter(
+            "ia_T_freeze", value=self.T_freeze, lower_bound=-5.0, upper_bound=5.0,
+            units="degC", description="Recovery suppressed below this temperature",
+        ))
+        self._state = ModelState.INITIALIZED
+
+    def validate(self) -> bool:
+        """Validate parameter bounds and physical constraint T_freeze < T_ref.
+
+        :returns: ``True`` if all parameters are in bounds and constraints hold.
+        :rtype: bool
+        """
+        if not self.parameters_valid():
+            return False
+        T_freeze = self.get_scalar_parameter("ia_T_freeze").value
+        T_ref = self.get_scalar_parameter("ia_T_ref").value
+        if T_freeze >= T_ref:
+            return False
+        self._state = ModelState.VALIDATED
+        return True
+
+    def prepare(self, data: pd.DataFrame) -> None:
+        """Load forcing data and sync parameters from the registry.
+
+        :param data: DataFrame with columns ``datetime``, ``rainfall_mm``,
+            and optionally ``temperature_c``.
+        :type data: pandas.DataFrame
+        :raises ValueError: If required columns are absent.
+        """
+        required = {"datetime", "rainfall_mm"}
+        missing = required - set(data.columns)
+        if missing:
+            raise ValueError(
+                f"prepare() data is missing required columns: {sorted(missing)}"
+            )
+
+        df = data.sort_values("datetime").reset_index(drop=True).copy()
+        df["rainfall_mm"] = df["rainfall_mm"].fillna(0.0).clip(lower=0.0)
+
+        T_ref = self.get_scalar_parameter("ia_T_ref").value
+        if "temperature_c" not in df.columns:
+            df["temperature_c"] = T_ref
+        else:
+            df["temperature_c"] = df["temperature_c"].fillna(T_ref)
+
+        self._prepared_df = df
+        self._sync_from_params()
+        self.reset()
+        self._state = ModelState.PREPARED
+
+    def predict(self) -> pd.DataFrame:
+        """Compute rainfall excess for the prepared time series.
+
+        Parameter values changed after :meth:`prepare` are picked up
+        automatically (required by :class:`~sparsehydro.calibration.problem.CalibrationProblem`).
+
+        :returns: DataFrame with columns ``datetime`` and ``p_excess_mm``.
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
+        if self._prepared_df is None:
+            raise RuntimeError("Call prepare(data) before predict().")
+
+        self._sync_from_params()
+        df = self._prepared_df
+
+        diffs = df["datetime"].diff().dropna()
+        dt_hours = pd.Timedelta(diffs.median()).total_seconds() / 3600.0
+        dt_arr = np.full(len(df), dt_hours)
+
+        excess = IAModel.compute_excess_series(
+            rainfall_mm=df["rainfall_mm"].to_numpy(dtype=float),
+            dt_hours=dt_arr,
+            temperature=df["temperature_c"].to_numpy(dtype=float),
+            ia_max=self.ia_max,
+            k0=self.k0,
+            kT=self.kT,
+            theta=self.theta,
+            T_ref=self.T_ref,
+            k_dep=self.k_dep,
+            T_freeze=self.T_freeze,
+        )
+
+        result = pd.DataFrame({
+            "datetime": df["datetime"].values,
+            "p_excess_mm": excess,
+        })
+        self._state = ModelState.PREDICTED
+        return result
+
+    def finalize(self) -> None:
+        """Release stored forcing data and advance to FINALIZED."""
+        self._prepared_df = None
+        self._state = ModelState.FINALIZED
+
+    # ------------------------------------------------------------------
+    # Physics methods (stateful, single time-step)
+    # ------------------------------------------------------------------
+
+    def recovery_rate(self, temperature: float | None = None) -> float:
+        """Compute k_rec(T) = k0 + kT * exp(θ*(T - T_ref)), zeroed below T_freeze.
+
+        :param temperature: Air temperature [°C]. ``None`` defaults to ``T_ref``.
+        :returns: Recovery rate [1/hr].
+        :rtype: float
+        """
+        T = self.T_ref if temperature is None else float(temperature)
+        if T < self.T_freeze:
+            return 0.0
+        return self.k0 + self.kT * math.exp(self.theta * (T - self.T_ref))
+
+    def step_dry(self, dt_hours: float, temperature: float | None = None) -> float:
+        """Advance ``ia_avail`` over a dry interval of ``dt_hours``.
+
+        :param dt_hours: Duration of dry interval [hr].
+        :param temperature: Air temperature [°C]. ``None`` uses ``T_ref``.
+        :returns: Updated ``ia_avail`` [mm].
+        :rtype: float
+        """
+        k = self.recovery_rate(temperature)
+        deficit = self.ia_max - self.ia_avail
+        self.ia_avail = self.ia_max - deficit * math.exp(-k * dt_hours)
+        self.ia_avail = max(0.0, min(self.ia_max, self.ia_avail))
+        return self.ia_avail
+
+    def step_wet(self, delta_precip_mm: float) -> float:
+        """Deplete ``ia_avail`` for a rainfall pulse of ``delta_precip_mm`` mm.
+
+        :param delta_precip_mm: Rainfall depth [mm], must be ≥ 0.
+        :returns: Updated ``ia_avail`` [mm].
+        :rtype: float
+        """
+        if delta_precip_mm <= 0.0:
+            return self.ia_avail
+        self.ia_avail = self.ia_avail * math.exp(-self.k_dep * delta_precip_mm)
+        self.ia_avail = max(0.0, min(self.ia_max, self.ia_avail))
+        return self.ia_avail
+
+    def compute_excess(self, rainfall_mm: float) -> float:
+        """Return rainfall excess and deplete ``ia_avail`` accordingly.
+
+        Excess = max(0, rainfall_mm - ia_avail).  The available capacity is
+        then depleted by the rainfall amount (not just the satisfied portion)
+        using the exponential depletion formula.
+
+        :param rainfall_mm: Rainfall depth for this time step [mm].
+        :returns: Rainfall excess [mm].
+        :rtype: float
+        """
+        excess = max(0.0, rainfall_mm - self.ia_avail)
+        if rainfall_mm > 0.0:
+            self.step_wet(rainfall_mm)
+        return excess
+
+    def reset(self) -> None:
+        """Reset ``ia_avail`` to ``ia_max`` (fully recovered state)."""
+        self.ia_avail = self.ia_max
+
+    # ------------------------------------------------------------------
+    # Static vectorized method — hot path for the optimizer
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def compute_excess_series(
+        rainfall_mm: np.ndarray,
+        dt_hours: np.ndarray,
+        temperature: np.ndarray | None,
+        ia_max: float,
+        k0: float,
+        kT: float,
+        theta: float,
+        T_ref: float,
+        k_dep: float,
+        T_freeze: float,
+    ) -> np.ndarray:
+        """Compute rainfall excess array for a full time series.
+
+        Pure function (no instance state) — safe for parallel optimizer use.
+        ``ia_avail`` starts at ``ia_max`` (fully saturated capacity).
+
+        :param rainfall_mm: 1-D array of rainfall depths [mm] per time step.
+        :param dt_hours: 1-D array of time-step durations [hr].
+        :param temperature: 1-D array of temperatures [°C], or ``None`` to
+            use ``T_ref`` for every step.
+        :param ia_max: Maximum abstraction capacity [mm].
+        :param k0: Base recovery rate [1/hr].
+        :param kT: Temperature-dependent recovery coefficient [1/hr].
+        :param theta: Temperature sensitivity exponent [1/°C].
+        :param T_ref: Reference temperature [°C].
+        :param k_dep: Depletion rate [1/mm].
+        :param T_freeze: Freeze threshold [°C].
+        :returns: 1-D array of rainfall excess values [mm].
+        :rtype: numpy.ndarray
+        """
+        n = len(rainfall_mm)
+        excess = np.zeros(n, dtype=float)
+        ia_avail = float(ia_max)
+
+        use_temp = temperature is not None
+
+        for i in range(n):
+            P = float(rainfall_mm[i])
+            dt = float(dt_hours[i])
+            T = float(temperature[i]) if use_temp else T_ref
+
+            if P <= 0.0:
+                # Dry step: recover
+                if T >= T_freeze:
+                    k_rec = k0 + kT * math.exp(theta * (T - T_ref))
+                else:
+                    k_rec = 0.0
+                deficit = ia_max - ia_avail
+                ia_avail = ia_max - deficit * math.exp(-k_rec * dt)
+            else:
+                # Wet step: compute excess then deplete
+                excess[i] = max(0.0, P - ia_avail)
+                ia_avail = ia_avail * math.exp(-k_dep * P)
+
+            ia_avail = max(0.0, min(ia_max, ia_avail))
+
+        return excess
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _sync_from_params(self) -> None:
+        """Update instance attributes from the scalar-parameter registry."""
+        self.ia_max = self.get_scalar_parameter("ia_max").value
+        self.k0 = self.get_scalar_parameter("ia_k0").value
+        self.kT = self.get_scalar_parameter("ia_kT").value
+        self.theta = self.get_scalar_parameter("ia_theta").value
+        self.T_ref = self.get_scalar_parameter("ia_T_ref").value
+        self.k_dep = self.get_scalar_parameter("ia_k_dep").value
+        self.T_freeze = self.get_scalar_parameter("ia_T_freeze").value
