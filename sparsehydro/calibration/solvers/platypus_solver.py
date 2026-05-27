@@ -14,7 +14,7 @@ Example usage::
     from sparsehydro.calibration import PlatypusSolver
 
     # Any Platypus algorithm, any keyword arguments
-    solver = PlatypusSolver(platypus.NSGA2, population_size=100, n_evaluations=10_000)
+    solver = PlatypusSolver(platypus.NSGAII, population_size=100, n_evaluations=10_000)
     solver = PlatypusSolver(platypus.SPEA2, population_size=50, n_evaluations=5_000)
     solver = PlatypusSolver(platypus.GDE3, population_size=80, n_evaluations=8_000)
     solver = PlatypusSolver(platypus.IBEA, population_size=100, n_evaluations=10_000)
@@ -70,7 +70,7 @@ try:
             from sparsehydro.calibration import PlatypusSolver
 
             # NSGA-II with explicit population size
-            solver = PlatypusSolver(platypus.NSGA2, population_size=100, n_evaluations=10_000)
+            solver = PlatypusSolver(platypus.NSGAII, population_size=100, n_evaluations=10_000)
 
             # SPEA2
             solver = PlatypusSolver(platypus.SPEA2, population_size=50, n_evaluations=5_000)
@@ -78,11 +78,11 @@ try:
             # GDE3 (good for real-valued problems)
             solver = PlatypusSolver(platypus.GDE3, population_size=80, n_evaluations=8_000)
 
-            # ε-MOEA with custom archive size
+            # ε-MOEA with epsilon archive
             solver = PlatypusSolver(
-                platypus.EpsilonMOEA,
-                population_size=100,
+                platypus.EpsMOEA,
                 epsilons=[0.01, 0.01],
+                population_size=100,
                 n_evaluations=10_000,
             )
 
@@ -138,10 +138,12 @@ try:
 
             history: list[GenerationRecord] = []
             iteration = 0
-            algorithm.initialize()
 
+            # Use step() rather than initialize()/iterate() directly so that
+            # algorithm.result is updated after each step (it is only written
+            # inside step(), not inside the lower-level methods).
             while algorithm.nfe < self.n_evaluations:
-                algorithm.iterate()
+                algorithm.step()
                 iteration += 1
 
                 if iteration % self.record_frequency == 0:

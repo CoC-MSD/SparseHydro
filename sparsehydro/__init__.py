@@ -60,14 +60,32 @@ try:
     from .visualization import (
         VisualizationModel,
         plot_timeseries,
+        plot_residuals_scatter,
+        plot_cumulative_volume,
         plot_pareto_evolution,
         plot_parallel_coordinates,
+        plot_objective_convergence,
+        plot_parameter_distributions,
+        plot_sensitivity_heatmap,
+        plot_pareto_scatter_matrix,
+        plot_rtk_shape,
+        plot_rdii_components,
+        plot_calibration_dashboard,
     )
     __all__ += [
         "VisualizationModel",
         "plot_timeseries",
+        "plot_residuals_scatter",
+        "plot_cumulative_volume",
         "plot_pareto_evolution",
         "plot_parallel_coordinates",
+        "plot_objective_convergence",
+        "plot_parameter_distributions",
+        "plot_sensitivity_heatmap",
+        "plot_pareto_scatter_matrix",
+        "plot_rtk_shape",
+        "plot_rdii_components",
+        "plot_calibration_dashboard",
     ]
 except ImportError:  # pragma: no cover
     pass

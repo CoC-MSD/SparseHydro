@@ -142,10 +142,25 @@ try:
                 seed=self.seed,
                 verbose=self.verbose,
             )
+            n_params = worker_problem.n_params
+            n_obj = worker_problem.n_objectives
+            if res.X is not None and res.F is not None:
+                pX = np.asarray(res.X)
+                pF = np.asarray(res.F)
+                # pymoo returns 1-D arrays for single-objective or single-solution results
+                if pX.ndim == 1:
+                    pX = pX.reshape(1, -1)
+                if pF.ndim == 1:
+                    # (n_solutions,) when n_obj==1, or (n_obj,) for a single solution
+                    pF = pF.reshape(-1, 1) if n_obj == 1 else pF.reshape(1, -1)
+            else:
+                pX = np.empty((0, n_params), dtype=float)
+                pF = np.empty((0, n_obj), dtype=float)
+
             return CalibrationResult(
                 history=callback.history,
-                pareto_X=res.X,
-                pareto_F=res.F,
+                pareto_X=pX,
+                pareto_F=pF,
                 param_names=problem.param_names,
                 objective_names=problem.objective_names,
                 minimize_flags=problem.minimize_flags,
