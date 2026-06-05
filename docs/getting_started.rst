@@ -179,6 +179,12 @@ always the same regardless of which solver you choose:
 Defining a Calibration Problem
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+:class:`~sparsehydro.calibration.problem.CalibrationProblem` wraps the model,
+input data, objectives, and all column mappings in one configuration object.
+It can be passed unchanged to *any* solver.
+
+**DataFrame workflow** — use ``column_map`` to wire data columns to model roles:
+
 .. code-block:: python
 
    import numpy as np
@@ -205,36 +211,82 @@ Defining a Calibration Problem
            self._state = ModelState.VALIDATED
            return True
 
-       def prepare(self, x: np.ndarray) -> None:
-           self._x = x
+       def prepare(self, data: pd.DataFrame) -> None:
+           self._x = data["x"].to_numpy()
            self._state = ModelState.PREPARED
 
-       def predict(self) -> np.ndarray:
+       def predict(self) -> pd.DataFrame:
            slope     = self.get_scalar_parameter("slope").value
            intercept = self.get_scalar_parameter("intercept").value
            self._state = ModelState.PREDICTED
-           return slope * self._x + intercept
+           return pd.DataFrame({"y": slope * self._x + intercept})
 
        def finalize(self) -> None:
            self._state = ModelState.FINALIZED
 
-   # --- Observed data ---
-   x        = np.linspace(0, 10, 50)
-   observed = 2.5 * x + 1.0 + np.random.default_rng(0).normal(0, 0.3, 50)
+   # --- Data (inputs and observed target in one DataFrame) ---
+   x_vals   = np.linspace(0, 10, 50)
+   observed = 2.5 * x_vals + 1.0 + np.random.default_rng(0).normal(0, 0.3, 50)
+   df       = pd.DataFrame({"x": x_vals, "obs": observed})
 
-   # --- Prepare the model ---
+   # --- Build and validate the model ---
    model = LinearModel()
    model.initialize()
    model.validate()
-   model.prepare(x)
 
-   # --- Wrap in a CalibrationProblem with two objectives ---
+   # --- Wrap in CalibrationProblem via column_map ---
+   # The problem calls model.prepare(df) automatically.
    problem = CalibrationProblem(
-       model     = model,
-       observed  = observed,
-       objectives= [MSE(), NashSutcliffe()],
+       model      = model,
+       data       = df,
+       objectives = [MSE(), NashSutcliffe()],
+       column_map = {
+           # Calibration roles  (reserved keys)
+           "observed":  "obs",   # column in df holding the target
+           "predicted": "y",     # column in model.predict() output
+       },
    )
-   problem.prepare()
+
+``column_map`` keys can be a **column-name string** (for DataFrame data) or a
+**callable** ``(data) → np.ndarray`` for any data type:
+
+.. code-block:: python
+
+   # Generic data — use callables
+   _obs = observed_array   # captured in closure
+   problem = CalibrationProblem(
+       model      = model,
+       objectives = [MSE()],
+       column_map = {
+           "observed":  lambda _: _obs,
+           "predicted": lambda df: df["y"].to_numpy(),
+       },
+   )
+
+**Freezing parameters** — set ``calibrate=False`` to hold a parameter fixed:
+
+.. code-block:: python
+
+   # Calibrate slope; hold intercept fixed at 0
+   model.get_scalar_parameter("intercept").calibrate = False
+   # CalibrationProblem will now optimise only 'slope'
+   print(f"Calibratable parameters: {problem.n_params}")
+
+**Column renaming** — non-reserved keys rename raw data columns before
+``model.prepare()`` is called:
+
+.. code-block:: python
+
+   problem = CalibrationProblem(
+       model      = model,
+       data       = raw_df,          # has column "raw_x", not "x"
+       objectives = [MSE()],
+       column_map = {
+           "x":         "raw_x",     # rename  raw_x  →  x  for the model
+           "observed":  "measured",  # target column
+           "predicted": "y",
+       },
+   )
 
 Objective Functions
 ~~~~~~~~~~~~~~~~~~~
@@ -289,7 +341,19 @@ Solvers
 -------
 
 All solvers share the same interface: construct with hyperparameters, then call
-:meth:`~sparsehydro.calibration.solvers.base.ISolver.solve`.
+:meth:`~sparsehydro.calibration.solvers.base.ISolver.solve`.  Keyword arguments
+passed to ``solve()`` override the constructor settings **for that call only**,
+which is handy for quick test runs:
+
+.. code-block:: python
+
+   solver = NSGAIISolver(pop_size=100, n_gen=200)
+
+   # Quick sanity check — 5 generations, same solver instance
+   quick = solver.solve(problem, n_gen=5)
+
+   # Full production run
+   full  = solver.solve(problem)
 
 NSGA-II (pymoo)
 ~~~~~~~~~~~~~~~
@@ -506,6 +570,46 @@ The three panels are:
    fig = plot_cumulative_volume(dt, obs, pred, title="Volume Balance")
    fig.show()
 
+**plot_calibration_timeseries** — two-row calibration dashboard:
+
+.. code-block:: python
+
+   import numpy as np
+   from sparsehydro.visualization import plot_calibration_timeseries
+
+   # Pareto-front predictions: shape (n_solutions, n_timesteps)
+   pareto_preds = np.stack([run_model(x) for x in result.pareto_X])
+
+   fig = plot_calibration_timeseries(
+       datetime      = dt,
+       observed      = obs,
+       predicted     = best_pred,
+       exogenous     = {
+           "Rainfall (mm)":    (rain,  "mm"),   # same units → same y-axis
+           "Temperature (°C)": (temp,  "°C"),   # different units → own axis
+           "Snow depth (mm)":  (snow,  "mm"),   # grouped with rainfall
+       },
+       pareto_predictions      = pareto_preds,
+       confidence_percentiles  = (25, 75),      # IQR band
+       tolerance_angles        = [10, 20],      # ±10° and ±20° lines on scatter
+   )
+   fig.show()
+
+The figure has two rows:
+
+1. **Row 1 (full width)** — exogenous inputs.  Traces with the same unit string
+   share a y-axis.  Rainfall-like traces (label contains "rain"/"precip") are
+   rendered as inverted bars; all others as lines.  The x-axis is linked to
+   row 2-left.
+
+2. **Row 2 left** — predicted vs observed time series with an optional IQR
+   confidence band computed from all Pareto solutions.
+
+3. **Row 2 right** — 1:1 scatter plot.  When ``pareto_predictions`` is supplied,
+   vertical box-whiskers summarise the Pareto range at each time step.  A dashed
+   45° line marks perfect fit; each angle in ``tolerance_angles`` adds a pair of
+   lines at ``45° ± θ`` radiating from the origin.
+
 Calibration Result Plots
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -700,33 +804,41 @@ Quick RDII calibration
 .. code-block:: python
 
    import pandas as pd
-   from sparsehydro.rdii import RDIIOptimizer
-
-   # ts must contain columns: datetime, rainfall_mm, temperature_c, observed_flow
-   ts = pd.read_csv("my_gauge_data.csv", parse_dates=["datetime"])
-
-   optimizer = RDIIOptimizer(n_triangles=3)
-   result    = optimizer.calibrate(
-       ts,
-       datetime_col  = "datetime",
-       rainfall_col  = "rainfall_mm",
-       temp_col      = "temperature_c",
-       observed_col  = "observed_flow",
-       pop_size      = 50,
-       n_gen         = 100,
+   from sparsehydro.rdii import RDIIModel
+   from sparsehydro.calibration import (
+       CalibrationProblem, NSGAIISolver, PeakWeightedMSE, NashSutcliffe,
    )
 
+   # df must contain columns: datetime, rainfall_mm, flow_cfs
+   # (temperature_c is optional — falls back to ia_T_ref when absent)
+   df = pd.read_csv("my_gauge_data.csv", parse_dates=["datetime"])
+
+   model = RDIIModel(n_triangles=3)
+   model.initialize()
+   model.validate()
+
+   problem = CalibrationProblem(
+       model=model,
+       data=df,
+       objectives=[PeakWeightedMSE(), NashSutcliffe()],
+       column_map={
+           "observed":  "flow_cfs",
+           "predicted": "rdii_cfs",
+       },
+   )
+   result = NSGAIISolver(pop_size=50, n_gen=100).solve(problem)
+
    # Best parameters by Nash-Sutcliffe efficiency
-   best = result.best_by("NashSutcliffe")
+   best = result.best_by("nash_sutcliffe")
    print(best)
 
    # Visualise
    from sparsehydro import plot_timeseries, plot_pareto_evolution
-   plot_timeseries(...).show()
    plot_pareto_evolution(result).show()
 
 See the :ref:`API Reference <api-reference>` for complete documentation of
 :class:`~sparsehydro.rdii.model.RDIIModel`,
-:class:`~sparsehydro.rdii.initial_abstraction.InitialAbstractionModel`,
-:class:`~sparsehydro.rdii.rtk_triangle.RTKTriangle`, and
-:class:`~sparsehydro.rdii.optimization.RDIIOptimizer`.
+:class:`~sparsehydro.rdii.initial_abstraction.IAModel`,
+:class:`~sparsehydro.rdii.rtk_triangle.RTKTriangle`,
+:class:`~sparsehydro.calibration.problem.CalibrationProblem`, and
+:class:`~sparsehydro.calibration.solvers.nsga2.NSGAIISolver`.

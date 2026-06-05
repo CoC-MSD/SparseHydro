@@ -12,10 +12,11 @@ import inspect
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
+import numpy as np
 import pandas as pd
 
 from .enums import ModelState
-from .parameters import ScalarParameter, VectorParameter
+from .parameters import ConstraintRecord, ScalarParameter, VectorParameter
 
 
 class IModel(ABC):
@@ -105,6 +106,7 @@ class IModel(ABC):
         self._state: ModelState = ModelState.CREATED
         self._scalar_parameters: dict[str, ScalarParameter] = {}
         self._vector_parameters: dict[str, VectorParameter] = {}
+        self._constraint_registry: list[ConstraintRecord] = []
 
     # ------------------------------------------------------------------
     # State queries
@@ -296,3 +298,91 @@ class IModel(ABC):
         return all(p.is_valid() for p in self._scalar_parameters.values()) and all(
             p.is_valid() for p in self._vector_parameters.values()
         )
+
+    def register_inequality_constraint(self, record: ConstraintRecord) -> None:
+        """Register a named inequality constraint.
+
+        Call this inside :meth:`initialize` after registering the parameters
+        the constraint acts upon.  The order of registration must match the
+        index order of the residuals returned by :meth:`inequality_constraints`.
+
+        :param record: Constraint metadata (name + description).
+        :type record: ConstraintRecord
+        """
+        self._constraint_registry.append(record)
+
+    @property
+    def inequality_constraint_names(self) -> list[str]:
+        """Ordered list of registered inequality constraint names.
+
+        :rtype: list[str]
+        """
+        return [r.name for r in self._constraint_registry]
+
+    @property
+    def inequality_constraint_descriptions(self) -> list[str]:
+        """Ordered list of registered inequality constraint descriptions.
+
+        :rtype: list[str]
+        """
+        return [r.description for r in self._constraint_registry]
+
+    def inequality_constraints(self) -> list[float]:
+        """Inequality constraint residuals where ``g_j <= 0`` means feasible.
+
+        Override in subclasses to expose model-specific constraints to the
+        calibration framework.  The default returns an empty list (unconstrained).
+        Register corresponding metadata via :meth:`register_inequality_constraint`
+        so that solvers and notebooks can display meaningful labels.
+
+        :returns: List of constraint residuals.
+        :rtype: list[float]
+        """
+        return []
+
+
+class IUnitHydroComponent(IModel, ABC):
+    """Abstract base for unit hydrograph components used within :class:`CombinedHydroModel`.
+
+    Extends :class:`IModel` with a single additional method, :meth:`get_kernel`,
+    that returns a normalized ordinate array suitable for convolution with a
+    rainfall-excess series.
+
+    **Amplitude parameter**
+
+    Many UH models carry a parameter that scales the total response volume
+    (``R`` for RTK triangles, ``A`` for Nash/Gamma UH shapes).  When a
+    component is embedded in :class:`CombinedHydroModel`, that composite
+    manages the fraction ``R_i`` separately and re-registers only the
+    *shape* parameters.  Declare the name of the amplitude/scaling
+    parameter as a class variable so the composite can exclude it::
+
+        class MyUH(IUnitHydroComponent):
+            _amplitude_param_name = "A"   # or "R", or None if none
+    """
+
+    _amplitude_param_name: ClassVar[str | None] = None
+
+    @abstractmethod
+    def get_kernel(
+        self,
+        dt_hours: float,
+        n_steps: int | None = None,
+    ) -> np.ndarray:
+        """Return normalized unit hydrograph ordinates.
+
+        The returned array satisfies::
+
+            np.sum(ordinates) * dt_hours ≈ 1.0
+
+        Multiply element-wise by ``R * p_excess_mm`` and sum across components
+        to obtain the RDII depth time series.
+
+        :param dt_hours: Time-step size [hr] of the forcing data.
+        :type dt_hours: float
+        :param n_steps: If provided, trim or zero-pad the result to this
+            length.  Defaults to the natural support of the kernel.
+        :type n_steps: int, optional
+        :returns: 1-D ordinate array [1/hr], length ``n_steps`` or natural.
+        :rtype: numpy.ndarray
+        """

@@ -29,13 +29,13 @@ import numpy as np
 import pandas as pd
 
 from ..enums import ModelState
-from ..interfaces import IModel
+from ..interfaces import IUnitHydroComponent
 from ..parameters import ScalarParameter
 
 _FFT_THRESHOLD = 500
 
 
-class RTKTriangle(IModel):
+class RTKTriangle(IUnitHydroComponent):
     """Triangular RTK unit hydrograph component implementing :class:`~sparsehydro.interfaces.IModel`.
 
     Constructor arguments seed the :meth:`initialize` parameter registry.
@@ -55,6 +55,7 @@ class RTKTriangle(IModel):
     """
 
     model_name = "rtk-triangle"
+    _amplitude_param_name = "R"
 
     def __init__(
         self,
@@ -182,6 +183,25 @@ class RTKTriangle(IModel):
         """Release stored forcing data and advance to FINALIZED."""
         self._prepared_df = None
         self._state = ModelState.FINALIZED
+
+    def get_kernel(
+        self,
+        dt_hours: float,
+        n_steps: int | None = None,
+    ) -> np.ndarray:
+        """Return the normalized triangular UH ordinate array.
+
+        Delegates to :func:`triangular_uh`.  The R-scaling is intentionally
+        **not** applied here; the caller (:class:`~sparsehydro.rdii.combined_model.CombinedHydroModel`)
+        applies its own ``R_i`` fraction.
+
+        :param dt_hours: Time-step size [hr].
+        :param n_steps: Optional length override (trimmed or zero-padded).
+        :returns: 1-D array satisfying ``np.sum(result) * dt_hours ≈ 1.0``.
+        :rtype: numpy.ndarray
+        """
+        self._sync_from_params()
+        return triangular_uh(self, dt_hours, n_steps)
 
     # ------------------------------------------------------------------
     # Private helpers

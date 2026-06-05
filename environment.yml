@@ -10,8 +10,12 @@ dependencies:
   - pip
   - pip:
     - pymoo>=0.6
+    - platypus-opt>=1.0
     - plotly>=5.0
     - pytest>=7.0
     - pytest-cov
     - sphinx>=7.0
-    - sphinx-rtd-theme>=2.0
+    - pydata-sphinx-theme>=0.15
+    - myst-parser>=3.0
+    - sphinx-design>=0.5
+    - sphinxcontrib-mermaid>=0.9

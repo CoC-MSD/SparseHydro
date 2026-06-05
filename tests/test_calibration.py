@@ -100,11 +100,14 @@ def _make_linear_model_and_problem():
     model.validate()
     model.prepare(x)
 
+    _obs = observed  # capture for closure
     problem = CalibrationProblem(
         model=model,
-        observed=observed,
         objectives=[MSE(), NashSutcliffe()],
-        result_extractor=lambda df: df["y"].to_numpy(),
+        column_map={
+            "observed":  lambda _: _obs,
+            "predicted": lambda df: df["y"].to_numpy(),
+        },
     )
     return problem, observed, true_slope, true_intercept
 
@@ -406,13 +409,15 @@ class TestCalibrationProblem(unittest.TestCase):
         m = _LinearModel()
         m.initialize()
         m.validate()
-        # not prepared
+        # not prepared, no data supplied → RuntimeError
         with self.assertRaises(RuntimeError):
             CalibrationProblem(
                 model=m,
-                observed=np.ones(5),
                 objectives=[MSE()],
-                result_extractor=lambda df: df["y"].to_numpy(),
+                column_map={
+                    "observed":  lambda _: np.ones(5),
+                    "predicted": lambda df: df["y"].to_numpy(),
+                },
             )
 
     def test_empty_objectives_raises(self):
@@ -424,9 +429,11 @@ class TestCalibrationProblem(unittest.TestCase):
         with self.assertRaises(ValueError):
             CalibrationProblem(
                 model=m,
-                observed=np.ones(10),
                 objectives=[],
-                result_extractor=lambda df: df["y"].to_numpy(),
+                column_map={
+                    "observed":  lambda _: np.ones(10),
+                    "predicted": lambda df: df["y"].to_numpy(),
+                },
             )
 
 

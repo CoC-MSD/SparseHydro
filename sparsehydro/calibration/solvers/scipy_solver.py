@@ -63,39 +63,40 @@ try:
             self.verbose = verbose
             self._kwargs = kwargs
 
-        def solve(self, problem: "CalibrationProblem") -> CalibrationResult:
+        def solve(self, problem: "CalibrationProblem", **kwargs) -> CalibrationResult:
             """Run the SciPy solver and return a
             :class:`~sparsehydro.calibration.result.CalibrationResult`.
-
-            The :attr:`~CalibrationResult.history` contains one
-            :class:`~sparsehydro.calibration.result.GenerationRecord` per
-            callback iteration when using ``differential_evolution``; it is
-            empty for other methods.
 
             The Pareto "front" contains exactly one solution — the optimum
             found for the selected objective.
 
-            :param problem: Calibration problem in PREPARED state.
-            :type problem: CalibrationProblem
+            :param problem: Calibration problem wrapping model + data + objectives.
+            :param kwargs: Per-call overrides: ``method``, ``objective_index``,
+                ``maxiter``, ``seed``, ``verbose``.
             :returns: Result with the single best solution.
             :rtype: CalibrationResult
             """
+            method          = kwargs.get("method",          self.method)
+            obj_idx         = kwargs.get("objective_index", self.objective_index)
+            maxiter         = kwargs.get("maxiter",         self.maxiter)
+            seed            = kwargs.get("seed",            self.seed)
+            verbose         = kwargs.get("verbose",         self.verbose)
+
             worker = problem.make_copy()
             xl, xu = problem.bounds
-            obj_idx = self.objective_index
             history: list[GenerationRecord] = []
 
             def scalar_fn(x: np.ndarray) -> float:
                 return float(worker.evaluate(x)[obj_idx])
 
-            if self.method == "differential_evolution":
+            if method == "differential_evolution":
                 bounds = list(zip(xl.tolist(), xu.tolist()))
                 iteration = [0]
 
                 def _callback(xk, convergence):
                     iteration[0] += 1
                     val = scalar_fn(xk)
-                    if self.verbose:
+                    if verbose:
                         print(f"Iteration {iteration[0]}: f={val:.6g}")
                     F_arr = np.array([[val]])
                     history.append(
@@ -110,8 +111,8 @@ try:
                 res = differential_evolution(
                     scalar_fn,
                     bounds=bounds,
-                    maxiter=self.maxiter,
-                    seed=self.seed,
+                    maxiter=maxiter,
+                    seed=seed,
                     callback=_callback,
                     **self._kwargs,
                 )
@@ -124,9 +125,9 @@ try:
                 res = scipy_minimize(
                     scalar_fn,
                     x0,
-                    method=self.method,
+                    method=method,
                     bounds=Bounds(lb=xl, ub=xu),
-                    options={"maxiter": self.maxiter, "disp": self.verbose},
+                    options={"maxiter": maxiter, "disp": verbose},
                     **self._kwargs,
                 )
                 best_x = res.x

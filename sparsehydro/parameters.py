@@ -44,6 +44,10 @@ class ScalarParameter:
     upper_bound: float
     units: str = ""
     description: str = ""
+    calibrate: bool = True
+    """When ``False`` the parameter is held fixed and excluded from the
+    calibration search space.  Its value is still applied during ``predict()``
+    but the optimizer will never modify it."""
 
     def __post_init__(self) -> None:
         if self.lower_bound > self.upper_bound:
@@ -87,7 +91,29 @@ class ScalarParameter:
             upper_bound=self.upper_bound,
             units=self.units,
             description=self.description,
+            calibrate=self.calibrate,
         )
+
+
+@dataclass
+class ConstraintRecord:
+    """Metadata for a single inequality constraint registered by a model.
+
+    Complements :class:`ScalarParameter` for the constraint side of the
+    optimisation problem.  The residual values themselves are returned by
+    :meth:`~sparsehydro.interfaces.IModel.inequality_constraints`; this class
+    carries only the *identity* of each constraint so that solvers and
+    notebooks can display meaningful labels.
+
+    :param name: Short machine-readable identifier (e.g. ``"sum_R_leq_1"``).
+    :type name: str
+    :param description: Human-readable description of what the constraint
+        enforces (e.g. ``"Sum of R_i fractions ≤ 1.0"``).
+    :type description: str
+    """
+
+    name: str
+    description: str = ""
 
 
 @dataclass

@@ -9,6 +9,8 @@ Parameter naming convention
 ---------------------------
 - IA parameters: ``ia_max``, ``ia_k0``, ``ia_kT``, ``ia_theta``,
   ``ia_T_ref``, ``ia_k_dep``, ``ia_T_freeze``
+- Area parameter: ``area_acres`` — drainage area [acres] used to convert
+  the depth hydrograph (mm) to a flow hydrograph (CFS).
 - RTK parameters (N triangles, 1-indexed): ``R_1``, ``T_1``, ``K_1``,
   ``R_2``, ``T_2``, ``K_2``, …
 
@@ -33,7 +35,7 @@ import pandas as pd
 
 from ..enums import ModelState
 from ..interfaces import IModel
-from ..parameters import ScalarParameter
+from ..parameters import ConstraintRecord, ScalarParameter
 from ..registry import registry
 from .initial_abstraction import IAModel
 from .rtk_triangle import RTKTriangle, triangular_uh
@@ -46,6 +48,10 @@ _DEFAULT_RTK = [
 ]
 
 _FFT_THRESHOLD = 500  # switch to fftconvolve when max(n, m) exceeds this
+
+# mm of depth over 1 acre for 1 hour → CFS
+# = (43560 ft²/ac) / (304.8 mm/ft) / (3600 s/hr) ≈ 0.03970
+_MM_AC_PER_HR_TO_CFS = 43560.0 / (304.8 * 3600.0)
 
 
 @registry.register
@@ -124,6 +130,12 @@ class RDIIModel(IModel):
             units="degC", description="Recovery suppressed below this temperature",
         ))
 
+        # --- Area parameter ---
+        self.register_scalar_parameter(ScalarParameter(
+            "area_acres", value=100.0, lower_bound=0.01, upper_bound=100_000.0,
+            units="acres", description="Drainage area — converts rdii_mm depth to rdii_cfs flow",
+        ))
+
         # --- RTK Triangle parameters ---
         for i in range(1, self.n_triangles + 1):
             R0, T0, K0 = _DEFAULT_RTK[(i - 1) % len(_DEFAULT_RTK)]
@@ -140,27 +152,27 @@ class RDIIModel(IModel):
                 units="-", description=f"Triangle {i}: recession-to-peak ratio",
             ))
 
+        # --- Inequality constraint metadata ---
+        self.register_inequality_constraint(ConstraintRecord(
+            name="sum_R_leq_1",
+            description=(
+                f"R_1 + … + R_{self.n_triangles} ≤ 1.0  "
+                f"(total sewer fraction of P_excess must not exceed 100 %)"
+            ),
+        ))
+
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:
         """Validate parameters and physical constraints.
 
-        In addition to standard bounds checks, enforces:
-
-        1. ``sum(R_i) <= 1.0`` — fractions cannot exceed total excess.
-        2. ``ia_T_freeze < ia_T_ref`` — freeze threshold below reference.
+        Enforces ``ia_T_freeze < ia_T_ref``. The ``Σ R_i <= 1.0`` constraint
+        is reported via :meth:`inequality_constraints` and enforced by the solver.
 
         :returns: ``True`` if all constraints are satisfied.
         :rtype: bool
         """
         if not self.parameters_valid():
-            return False
-
-        R_sum = sum(
-            self.get_scalar_parameter(f"R_{i}").value
-            for i in range(1, self.n_triangles + 1)
-        )
-        if R_sum > 1.0:
             return False
 
         T_freeze = self.get_scalar_parameter("ia_T_freeze").value
@@ -226,8 +238,8 @@ class RDIIModel(IModel):
         so parameter values changed after ``prepare()`` are picked up
         automatically (required by the general :class:`CalibrationProblem`).
 
-        :returns: DataFrame with columns ``datetime``, ``rdii_mm``,
-            ``p_excess_mm``.
+        :returns: DataFrame with columns ``datetime``, ``rdii_cfs``,
+            ``rdii_mm``, ``p_excess_mm``.
         :rtype: pandas.DataFrame
         :raises RuntimeError: If ``prepare()`` has not been called.
         """
@@ -252,8 +264,12 @@ class RDIIModel(IModel):
 
         rdii = np.clip(rdii, 0.0, None)
 
+        area_acres = self.get_scalar_parameter("area_acres").value
+        rdii_cfs = rdii * area_acres * _MM_AC_PER_HR_TO_CFS / self._dt_hours
+
         result = pd.DataFrame({
             "datetime": self._prepared_df["datetime"].values,
+            "rdii_cfs": rdii_cfs,
             "rdii_mm": rdii,
             "p_excess_mm": self._p_excess.copy(),
         })
@@ -269,6 +285,26 @@ class RDIIModel(IModel):
         self._state = ModelState.FINALIZED
 
     # ------------------------------------------------------------------
+    # Constraints
+    # ------------------------------------------------------------------
+
+    def inequality_constraints(self) -> list[float]:
+        """Inequality constraint residuals for the optimizer.
+
+        Returns ``[Σ R_i - 1.0]``.  A value ≤ 0 means feasible.
+        The solver (NSGA-II via pymoo) enforces this natively; other solvers
+        receive a squared penalty via :meth:`~sparsehydro.calibration.CalibrationProblem.evaluate`.
+
+        :returns: List with one residual: ``sum(R_i) - 1.0``.
+        :rtype: list[float]
+        """
+        R_sum = sum(
+            self.get_scalar_parameter(f"R_{i}").value
+            for i in range(1, self.n_triangles + 1)
+        )
+        return [R_sum - 1.0]
+
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
@@ -282,7 +318,6 @@ class RDIIModel(IModel):
             )
             for i in range(1, self.n_triangles + 1)
         ]
-        # Recompute kernels whenever triangles are re-synced
         if self._prepared_df is not None:
             self._uh_kernels = [
                 triangular_uh(tri, self._dt_hours) for tri in self._triangles

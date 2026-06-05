@@ -41,13 +41,19 @@ try:
             super().__init__(
                 n_var=problem.n_params,
                 n_obj=problem.n_objectives,
+                n_ieq_constr=problem.n_ieq_constr,
                 xl=xl,
                 xu=xu,
             )
             self._problem = problem
 
         def _evaluate(self, x: np.ndarray, out: dict, *args, **kwargs) -> None:
-            out["F"] = self._problem.evaluate(x)
+            # penalty_weight=0: pymoo handles constraints natively via out["G"]
+            out["F"] = self._problem.evaluate(x, penalty_weight=0.0)
+            if self._problem.n_ieq_constr > 0:
+                out["G"] = np.array(
+                    self._problem._model.inequality_constraints(), dtype=float
+                )
 
     class _GenerationCallback(Callback):
         """Appends a GenerationRecord to history after each generation."""
@@ -104,31 +110,38 @@ try:
             self.verbose = verbose
             self.n_jobs = n_jobs
 
-        def solve(self, problem: "CalibrationProblem") -> CalibrationResult:
+        def solve(self, problem: "CalibrationProblem", **kwargs) -> CalibrationResult:
             """Run NSGA-II and return a :class:`~sparsehydro.calibration.result.CalibrationResult`.
 
-            :param problem: Calibration problem in PREPARED state.
-            :type problem: CalibrationProblem
+            :param problem: Calibration problem wrapping model + data + objectives.
+            :param kwargs: Per-call overrides: ``pop_size``, ``n_gen``, ``seed``,
+                ``verbose``, ``n_jobs``.
             :returns: Result with per-generation history and final Pareto front.
             :rtype: CalibrationResult
             """
+            pop_size = kwargs.get("pop_size", self.pop_size)
+            n_gen    = kwargs.get("n_gen",    self.n_gen)
+            seed     = kwargs.get("seed",     self.seed)
+            verbose  = kwargs.get("verbose",  self.verbose)
+            n_jobs   = kwargs.get("n_jobs",   self.n_jobs)
+
             worker_problem = problem.make_copy()
             pymoo_problem = _PymooAdapter(worker_problem)
 
-            if self.n_jobs > 1:
+            if n_jobs > 1:
                 try:
                     from concurrent.futures import ProcessPoolExecutor
                     from pymoo.core.problem import (  # type: ignore[import]
                         StarmapParallelization,
                     )
-                    executor = ProcessPoolExecutor(max_workers=self.n_jobs)
+                    executor = ProcessPoolExecutor(max_workers=n_jobs)
                     pymoo_problem.runner = StarmapParallelization(executor.map)
                 except Exception:
                     pass  # fall back to sequential
 
             callback = _GenerationCallback()
             algorithm = NSGA2(
-                pop_size=self.pop_size,
+                pop_size=pop_size,
                 sampling=FloatRandomSampling(),
                 crossover=SBX(prob=0.9, eta=15),
                 mutation=PM(eta=20),
@@ -137,10 +150,10 @@ try:
             res = pymoo_minimize(
                 pymoo_problem,
                 algorithm,
-                ("n_gen", self.n_gen),
+                ("n_gen", n_gen),
                 callback=callback,
-                seed=self.seed,
-                verbose=self.verbose,
+                seed=seed,
+                verbose=verbose,
             )
             n_params = worker_problem.n_params
             n_obj = worker_problem.n_objectives

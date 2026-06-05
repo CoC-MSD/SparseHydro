@@ -120,11 +120,14 @@ def _make_problem(objectives=None) -> CalibrationProblem:
     m.initialize()
     m.validate()
     m.prepare(_X)
+    _obs = _OBSERVED
     return CalibrationProblem(
         model=m,
-        observed=_OBSERVED,
         objectives=objectives,
-        result_extractor=lambda df: df["y"].to_numpy(),
+        column_map={
+            "observed":  lambda _: _obs,
+            "predicted": lambda df: df["y"].to_numpy(),
+        },
     )
 
 
@@ -814,7 +817,7 @@ class TestParticleSwarmSolver(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from sparsehydro.calibration.solvers.pso_solver import ParticleSwarmSolver
+        from sparsehydro.calibration.solvers.platypus_solver import ParticleSwarmSolver
         cls.Solver = ParticleSwarmSolver
         cls.problem = _make_problem()
         cls.problem_single = _make_problem(objectives=[MSE()])

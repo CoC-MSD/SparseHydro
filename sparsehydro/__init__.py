@@ -36,6 +36,9 @@ try:
         RTKTriangle,
         triangular_uh,
         RDIIModel,
+        CombinedHydroModel,
+        SeasonalityModel,
+        compute_time_features,
         peak_weighted_mse,
         nash_sutcliffe,
     )
@@ -44,17 +47,17 @@ try:
         "RTKTriangle",
         "triangular_uh",
         "RDIIModel",
+        "CombinedHydroModel",
+        "SeasonalityModel",
+        "compute_time_features",
         "peak_weighted_mse",
         "nash_sutcliffe",
     ]
 except ImportError:  # pragma: no cover
     pass
 
-try:
-    from .rdii import RDIIOptimizer
-    __all__ += ["RDIIOptimizer"]
-except ImportError:  # pragma: no cover
-    pass
+from .ensemble import EnsembleModel
+__all__ += ["EnsembleModel"]
 
 try:
     from .visualization import (
@@ -62,6 +65,8 @@ try:
         plot_timeseries,
         plot_residuals_scatter,
         plot_cumulative_volume,
+        plot_data_explorer,
+        plot_ensemble_timeseries,
         plot_pareto_evolution,
         plot_parallel_coordinates,
         plot_objective_convergence,
@@ -77,6 +82,8 @@ try:
         "plot_timeseries",
         "plot_residuals_scatter",
         "plot_cumulative_volume",
+        "plot_data_explorer",
+        "plot_ensemble_timeseries",
         "plot_pareto_evolution",
         "plot_parallel_coordinates",
         "plot_objective_convergence",

@@ -35,7 +35,7 @@ import numpy as np
 import pandas as pd
 
 from ..enums import ModelState
-from ..interfaces import IModel
+from ..interfaces import IUnitHydroComponent
 from ..parameters import ScalarParameter
 from ..registry import registry
 
@@ -71,7 +71,7 @@ def _get_uh_class() -> type:
 # Adapter base class
 # ---------------------------------------------------------------------------
 
-class UnitHydrographAdapter(IModel):
+class UnitHydrographAdapter(IUnitHydroComponent):
     """Adapter base that bridges ``UnitHydrograph`` to the ``IModel`` lifecycle.
 
     **Do not instantiate or register this class directly.**
@@ -116,6 +116,10 @@ class UnitHydrographAdapter(IModel):
     # Keeping them here satisfies IModel.__init_subclass__ for this base.
     model_name: ClassVar[str] = "uh-adapter"
     _uh_model_name: ClassVar[str] = ""
+    # All UH models in the registry carry an "A" amplitude/scaling parameter.
+    # CombinedHydroModel uses this to exclude A from shape-param re-registration
+    # and manage the R fraction separately.
+    _amplitude_param_name: ClassVar[str | None] = "A"
 
     def __init__(self) -> None:
         super().__init__()
@@ -280,6 +284,40 @@ class UnitHydrographAdapter(IModel):
             raise RuntimeError("Call initialize() before get_uh().")
         self._sync_to_uh()
         return self._uh.get_uh(max_steps=max_steps, norm=norm)
+
+    def get_kernel(
+        self,
+        dt_hours: float,
+        n_steps: int | None = None,
+    ) -> np.ndarray:
+        """Return the normalized UH ordinate array for use in a composite model.
+
+        Returns ``get_uh(norm=1)`` — the UH shape with the ``A`` amplitude
+        parameter divided out, so ``np.sum(result) ≈ 1.0``.
+
+        .. note::
+            The UnitHydrograph library generates kernels in native data time
+            steps (typically 1 hr).  The ``dt_hours`` argument is accepted for
+            API uniformity but does not resample the kernel.  For best results,
+            use the same time-step resolution as the data on which the model
+            was calibrated.
+
+        :param dt_hours: Time-step size [hr] of the forcing data (informational).
+        :param n_steps: If provided, trim or zero-pad the result to this length.
+        :returns: 1-D normalised ordinate array.
+        :rtype: numpy.ndarray
+        :raises RuntimeError: If :meth:`initialize` has not been called.
+        """
+        if self._uh is None:
+            raise RuntimeError("Call initialize() before get_kernel().")
+        self._sync_to_uh()
+        ordinates = self._uh.get_uh(norm=1)
+        if n_steps is not None:
+            if len(ordinates) >= n_steps:
+                ordinates = ordinates[:n_steps]
+            else:
+                ordinates = np.pad(ordinates, (0, n_steps - len(ordinates)))
+        return ordinates
 
     @property
     def is_fit(self) -> bool:

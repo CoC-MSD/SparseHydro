@@ -21,9 +21,9 @@ names so that a single import covers the essential API:
    from sparsehydro import (
        IModel, ModelState, ScalarParameter,
        CalibrationProblem, CalibrationResult,
-       MSE, RMSE, NashSutcliffe,
+       MSE, RMSE, NashSutcliffe, KGE, PeakWeightedMSE,
        NSGAIISolver, ScipySolver, PlatypusSolver, ParticleSwarmSolver,
-       plot_timeseries, plot_calibration_dashboard,
+       plot_timeseries, plot_calibration_timeseries, plot_calibration_dashboard,
    )
 
 .. automodule:: sparsehydro
@@ -47,6 +47,16 @@ calibration engine.  Every numeric quantity that may be optimised must be
 registered with the model via a :class:`~sparsehydro.parameters.ScalarParameter`
 (single value) or :class:`~sparsehydro.parameters.VectorParameter` (array).
 
+Setting ``calibrate=False`` on a :class:`~sparsehydro.parameters.ScalarParameter`
+freezes that parameter at its current value — it is excluded from the
+optimisation search space but still applied during ``predict()``:
+
+.. code-block:: python
+
+   p = ScalarParameter("area_acres", value=250.0,
+                       lower_bound=1.0, upper_bound=100_000.0,
+                       calibrate=False)   # held fixed; not optimised
+
 .. automodule:: sparsehydro.parameters
    :members:
    :show-inheritance:
@@ -57,6 +67,11 @@ Model Interface
 All physical models in *sparsehydro* implement :class:`~sparsehydro.interfaces.IModel`.
 The lifecycle enforces a consistent prepare → predict → finalize pattern and
 keeps the calibration engine decoupled from model internals.
+
+:class:`~sparsehydro.interfaces.IUnitHydroComponent` extends :class:`~sparsehydro.interfaces.IModel`
+with a :meth:`~sparsehydro.interfaces.IUnitHydroComponent.get_kernel` method.
+Any model implementing this interface can be used as a component inside
+:class:`~sparsehydro.rdii.combined_model.CombinedHydroModel`.
 
 .. automodule:: sparsehydro.interfaces
    :members:
@@ -89,7 +104,7 @@ RDII component analysis.  All functions require the optional ``plotly`` dependen
 
    pip install plotly
 
-All 13 public names are importable directly from :mod:`sparsehydro.visualization`
+All public names are importable directly from :mod:`sparsehydro.visualization`
 or from the top-level :mod:`sparsehydro` namespace.
 
 .. automodule:: sparsehydro.visualization
@@ -150,10 +165,12 @@ RDII
 The :mod:`sparsehydro.rdii` subpackage implements the full physics-based
 Rainfall-Derived Inflow and Infiltration (RDII) modelling chain:
 
-* Initial abstraction with temperature-dependent recovery
-* Triangular RTK unit hydrographs
-* Multi-objective calibration objectives
-* One-stop :class:`~sparsehydro.rdii.optimization.RDIIOptimizer`
+* Temperature-driven Initial Abstraction recovery/depletion (:class:`~sparsehydro.rdii.initial_abstraction.IAModel`)
+* N triangular RTK unit hydrographs (:class:`~sparsehydro.rdii.rtk_triangle.RTKTriangle`)
+* Configurable composite model mixing any IA model with any number of UH types (:class:`~sparsehydro.rdii.combined_model.CombinedHydroModel`)
+* ``area_acres`` parameter converts depth [mm] → flow [CFS] automatically
+* Calibration via the generic :class:`~sparsehydro.calibration.problem.CalibrationProblem`
+  — use ``column_map={"observed": "flow_cfs", "predicted": "rdii_cfs"}``
 
 Requires the optional ``rdii`` extra:
 
@@ -187,17 +204,39 @@ RTK Triangle
    :members:
    :show-inheritance:
 
+Combined Hydro Model
+~~~~~~~~~~~~~~~~~~~~
+
+:class:`~sparsehydro.rdii.combined_model.CombinedHydroModel` generalises
+:class:`~sparsehydro.rdii.model.RDIIModel` by accepting *any*
+:class:`~sparsehydro.interfaces.IModel`-based initial-abstraction model and
+*any* list of :class:`~sparsehydro.interfaces.IUnitHydroComponent` objects —
+RTK triangles, Nash/Gamma UH adapters, or custom shapes:
+
+.. code-block:: python
+
+   from sparsehydro.rdii import CombinedHydroModel, IAModel, RTKTriangle
+   from sparsehydro.unithydrograph import create_uh_model
+
+   NashUH = create_uh_model("Nash")
+
+   model = CombinedHydroModel(
+       ia_model=IAModel(),
+       uh_components=[
+           RTKTriangle(R=0.05, T=1.0, K=1.5),   # fast RTK
+           RTKTriangle(R=0.03, T=12.0, K=2.0),  # medium RTK
+           NashUH(),                              # Nash UH shape
+       ],
+   )
+
+.. automodule:: sparsehydro.rdii.combined_model
+   :members:
+   :show-inheritance:
+
 RDII Objectives
 ~~~~~~~~~~~~~~~
 
 .. automodule:: sparsehydro.rdii.objectives
-   :members:
-   :show-inheritance:
-
-RDII Optimization
-~~~~~~~~~~~~~~~~~
-
-.. automodule:: sparsehydro.rdii.optimization
    :members:
    :show-inheritance:
 
@@ -303,7 +342,7 @@ and return a :class:`~sparsehydro.calibration.result.CalibrationResult`.
    * - :class:`~sparsehydro.calibration.solvers.platypus_solver.PlatypusSolver`
      - Any Platypus algorithm
      - ``platypus-opt``
-   * - :class:`~sparsehydro.calibration.solvers.pso_solver.ParticleSwarmSolver`
+   * - :class:`~sparsehydro.calibration.solvers.platypus_solver.ParticleSwarmSolver`
      - SMPSO / OMOPSO (PSO)
      - ``platypus-opt``
 
@@ -365,8 +404,11 @@ Requires ``platypus-opt``:
 Particle Swarm Solver
 ~~~~~~~~~~~~~~~~~~~~~
 
-Wraps :class:`platypus.SMPSO` (default) or :class:`platypus.OMOPSO`
-(when ``epsilons`` are provided).
+:class:`~sparsehydro.calibration.solvers.platypus_solver.ParticleSwarmSolver`
+is defined in the same module as :class:`~sparsehydro.calibration.solvers.platypus_solver.PlatypusSolver`.
+It wraps :class:`platypus.SMPSO` (default) or :class:`platypus.OMOPSO`
+(when ``epsilons`` are provided) behind the standard
+:class:`~sparsehydro.calibration.solvers.base.ISolver` interface.
 
 Requires ``platypus-opt``:
 
@@ -374,6 +416,6 @@ Requires ``platypus-opt``:
 
    pip install platypus-opt
 
-.. automodule:: sparsehydro.calibration.solvers.pso_solver
-   :members:
-   :show-inheritance:
+See :ref:`Platypus Solver` above — ``ParticleSwarmSolver`` is exported from
+:mod:`sparsehydro.calibration.solvers.platypus_solver` and from the
+top-level :mod:`sparsehydro.calibration` namespace.

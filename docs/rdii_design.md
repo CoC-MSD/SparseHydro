@@ -10,12 +10,12 @@ SWMM's standard RDII calibration requires 12 monthly RTK parameter sets because 
 
 ```
 sparsehydro/rdii/
-├── __init__.py               # Public surface; guards optimization/viz imports
+├── __init__.py               # Public surface; guards viz imports
 ├── initial_abstraction.py    # IAModel class + static compute_excess_series()
-├── rtk_triangle.py           # RTKTriangle dataclass + triangular_uh()
+├── rtk_triangle.py           # RTKTriangle(IUnitHydroComponent) + triangular_uh()
 ├── model.py                  # RDIIModel(IModel), model_name="rdii"
+├── combined_model.py         # CombinedHydroModel — configurable IA + any-UH composite
 ├── objectives.py             # peak_weighted_mse(), nash_sutcliffe()
-├── optimization.py           # RDIIOptimizer, RDIIResult, GenerationRecord
 └── visualization.py          # plot_timeseries(), plot_pareto_evolution(),
                               # plot_parallel_coordinates()
 ```
@@ -132,8 +132,10 @@ Missing `temperature_c` is filled with the current `ia_T_ref` parameter value.
 
 ## Multi-Objective Optimization
 
-`RDIIOptimizer` wraps NSGA-II from `pymoo` and auto-discovers all
-`ScalarParameter` bounds from the model registry.
+Calibration uses the generic `CalibrationProblem` + `ISolver` framework in
+`sparsehydro.calibration`.  `CalibrationProblem` auto-discovers all
+`ScalarParameter` bounds from the model registry and exposes any
+`inequality_constraints()` to the solver.
 
 ### Objectives
 
@@ -142,20 +144,35 @@ Missing `temperature_c` is filled with the current `ia_T_ref` parameter value.
 $$PWMSE = \frac{\sum_t w_t\,(Q_{obs,t} - Q_{pred,t})^2}{\sum_t w_t},
 \quad w_t = \frac{Q_{obs,t}}{\overline{Q}_{obs}}$$
 
-2. **Nash-Sutcliffe Efficiency** (maximize → minimize −NSE):
+2. **Nash-Sutcliffe Efficiency** (maximize → minimized as −NSE internally):
 
 $$NSE = 1 - \frac{\sum_t (Q_{obs,t}-Q_{pred,t})^2}{\sum_t (Q_{obs,t}-\overline{Q}_{obs})^2}$$
 
 ### Usage
 
 ```python
-from sparsehydro.rdii import RDIIOptimizer
+from sparsehydro.rdii import RDIIModel
+from sparsehydro.calibration import (
+    CalibrationProblem, NSGAIISolver, PeakWeightedMSE, NashSutcliffe,
+)
 
-opt = RDIIOptimizer(model, observed_flow=df["flow_cfs"].to_numpy())
-result = opt.run(pop_size=100, n_gen=200, seed=42)
+model = RDIIModel(n_triangles=3)
+model.initialize()
+model.validate()
 
-print(result.pareto_nse)          # NSE values on final Pareto front
-best_params = result.best_by_nse() # parameter vector with highest NSE
+problem = CalibrationProblem(
+    model=model,
+    data=df,                          # datetime, rainfall_mm, flow_cfs [, temperature_c]
+    objectives=[PeakWeightedMSE(), NashSutcliffe()],
+    column_map={
+        "observed":  "flow_cfs",
+        "predicted": "rdii_cfs",
+    },
+)
+result = NSGAIISolver(pop_size=100, n_gen=200, seed=42).solve(problem)
+
+print(result.pareto_X.shape)           # (n_solutions, n_params)
+best_params = result.best_by("nash_sutcliffe")  # parameter Series
 ```
 
 **NSGA-II settings:** SBX crossover (prob=0.9, η=15), polynomial mutation (η=20),

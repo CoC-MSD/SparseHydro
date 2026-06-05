@@ -103,17 +103,24 @@ try:
             self.record_frequency = record_frequency
             self.algorithm_kwargs = algorithm_kwargs
 
-        def solve(self, problem: "CalibrationProblem") -> CalibrationResult:
+        def solve(self, problem: "CalibrationProblem", **kwargs) -> CalibrationResult:
             """Run the Platypus algorithm and return a :class:`~sparsehydro.calibration.result.CalibrationResult`.
 
-            :param problem: Calibration problem in PREPARED state.
-            :type problem: CalibrationProblem
+            :param problem: Calibration problem wrapping model + data + objectives.
+            :param kwargs: Per-call overrides: ``n_evaluations``, ``seed``,
+                ``record_frequency``.  Additional keys are merged into
+                ``algorithm_kwargs`` and forwarded to the algorithm constructor.
             :returns: Result with per-iteration history and final Pareto front.
             :rtype: CalibrationResult
             """
-            if self.seed is not None:
-                _random.seed(self.seed)
-                np.random.seed(self.seed)
+            n_evaluations    = kwargs.pop("n_evaluations",    self.n_evaluations)
+            seed             = kwargs.pop("seed",             self.seed)
+            record_frequency = kwargs.pop("record_frequency", self.record_frequency)
+            algorithm_kwargs = {**self.algorithm_kwargs, **kwargs}
+
+            if seed is not None:
+                _random.seed(seed)
+                np.random.seed(seed)
 
             worker = problem.make_copy()
             xl, xu = worker.bounds
@@ -134,7 +141,7 @@ try:
             platypus_problem.function = _evaluate
 
             # Build and step the algorithm ----------------------------------------
-            algorithm = self.algorithm_class(platypus_problem, **self.algorithm_kwargs)
+            algorithm = self.algorithm_class(platypus_problem, **algorithm_kwargs)
 
             history: list[GenerationRecord] = []
             iteration = 0
@@ -142,11 +149,11 @@ try:
             # Use step() rather than initialize()/iterate() directly so that
             # algorithm.result is updated after each step (it is only written
             # inside step(), not inside the lower-level methods).
-            while algorithm.nfe < self.n_evaluations:
+            while algorithm.nfe < n_evaluations:
                 algorithm.step()
                 iteration += 1
 
-                if iteration % self.record_frequency == 0:
+                if iteration % record_frequency == 0:
                     current = algorithm.result
                     if current:
                         X = np.array(
@@ -186,6 +193,75 @@ try:
                 minimize_flags=problem.minimize_flags,
             )
 
+    class ParticleSwarmSolver(ISolver):
+        """Multi-objective Particle Swarm solver backed by Platypus.
+
+        Selects ``platypus.OMOPSO`` (ε-dominance archive) when *epsilons* are
+        provided, otherwise uses ``platypus.SMPSO``.
+
+        :param swarm_size: Number of particles in the swarm.
+        :param leader_size: Size of the leader archive.
+        :param n_evaluations: Total function-evaluation budget.
+        :param epsilons: Per-objective ε values for OMOPSO; ``None`` uses SMPSO.
+            Length must equal the number of objectives.
+        :param seed: Random seed (``None`` for non-deterministic).
+        :param record_frequency: History snapshot interval (algorithm iterations).
+        :param algorithm_kwargs: Additional keyword arguments forwarded to the
+            Platypus algorithm constructor.
+        """
+
+        def __init__(
+            self,
+            swarm_size: int = 100,
+            leader_size: int = 100,
+            n_evaluations: int = 10_000,
+            epsilons: list | None = None,
+            seed: int | None = 42,
+            record_frequency: int = 1,
+            **algorithm_kwargs,
+        ) -> None:
+            self.swarm_size = swarm_size
+            self.leader_size = leader_size
+            self.n_evaluations = n_evaluations
+            self.epsilons = epsilons
+            self.seed = seed
+            self.record_frequency = record_frequency
+            self.algorithm_kwargs = algorithm_kwargs
+
+        def solve(self, problem: "CalibrationProblem", **kwargs) -> "CalibrationResult":
+            """Run the PSO solver and return a :class:`~sparsehydro.calibration.result.CalibrationResult`.
+
+            :param problem: Calibration problem wrapping model + data + objectives.
+            :param kwargs: Per-call overrides: ``swarm_size``, ``leader_size``,
+                ``n_evaluations``, ``seed``, ``record_frequency``, ``epsilons``.
+            """
+            swarm_size       = kwargs.pop("swarm_size",       self.swarm_size)
+            leader_size      = kwargs.pop("leader_size",      self.leader_size)
+            n_evaluations    = kwargs.pop("n_evaluations",    self.n_evaluations)
+            epsilons         = kwargs.pop("epsilons",         self.epsilons)
+            seed             = kwargs.pop("seed",             self.seed)
+            record_frequency = kwargs.pop("record_frequency", self.record_frequency)
+
+            if epsilons is not None and len(epsilons) != problem.n_objectives:
+                raise ValueError(
+                    f"epsilons length ({len(epsilons)}) must match the number of "
+                    f"objectives ({problem.n_objectives})."
+                )
+
+            algo = platypus.OMOPSO if epsilons is not None else platypus.SMPSO
+            extra = {"epsilons": epsilons} if epsilons is not None else {}
+
+            return PlatypusSolver(
+                algo,
+                swarm_size=swarm_size,
+                leader_size=leader_size,
+                n_evaluations=n_evaluations,
+                seed=seed,
+                record_frequency=record_frequency,
+                **extra,
+                **{**self.algorithm_kwargs, **kwargs},
+            ).solve(problem)
+
 except ImportError:
 
     class _PlatypusSolverStub:
@@ -209,3 +285,9 @@ except ImportError:
             )
 
     PlatypusSolver = _PlatypusSolverStub  # type: ignore[assignment, misc]
+
+    def ParticleSwarmSolver(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError(
+            "platypus-opt is required for ParticleSwarmSolver. "
+            "Install with: pip install sparsehydro[platypus]"
+        )

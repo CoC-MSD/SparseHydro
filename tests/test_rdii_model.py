@@ -379,7 +379,7 @@ class TestRDIIModel(unittest.TestCase):
             with self.subTest(n_triangles=n):
                 m = RDIIModel(n_triangles=n)
                 m.initialize()
-                self.assertEqual(len(m.scalar_parameter_names), 7 + 3 * n)
+                self.assertEqual(len(m.scalar_parameter_names), 8 + 3 * n)
 
     def test_initialize_ia_params_present(self):
         m = RDIIModel()
@@ -406,11 +406,18 @@ class TestRDIIModel(unittest.TestCase):
         self.assertTrue(m.is_validated())
 
     def test_validate_fails_R_sum_exceeds_one(self):
+        # validate() no longer blocks on R_sum > 1; the constraint is now
+        # enforced by the solver via inequality_constraints().
         m = RDIIModel(n_triangles=3)
         m.initialize()
         for i in range(1, 4):
             m._scalar_parameters[f"R_{i}"].value = 0.5
-        self.assertFalse(m.validate())
+        # validate() should still pass (T_freeze < T_ref, all bounds OK)
+        self.assertTrue(m.validate())
+        # but inequality_constraints should report a violation
+        g = m.inequality_constraints()
+        self.assertEqual(len(g), 1)
+        self.assertGreater(g[0], 0.0)   # 1.5 - 1.0 = 0.5 > 0 → infeasible
 
     def test_validate_fails_T_freeze_ge_T_ref(self):
         m = RDIIModel()
@@ -460,6 +467,7 @@ class TestRDIIModel(unittest.TestCase):
         m = self._prepared()
         result = m.predict()
         self.assertIsInstance(result, pd.DataFrame)
+        self.assertIn("rdii_cfs", result.columns)
         self.assertIn("rdii_mm", result.columns)
         self.assertIn("p_excess_mm", result.columns)
         self.assertIn("datetime", result.columns)
@@ -473,6 +481,7 @@ class TestRDIIModel(unittest.TestCase):
         m = self._prepared()
         result = m.predict()
         self.assertTrue(np.all(result["rdii_mm"].to_numpy() >= -1e-10))
+        self.assertTrue(np.all(result["rdii_cfs"].to_numpy() >= -1e-10))
 
     def test_predict_zero_rain_zero_rdii(self):
         n = 24
@@ -486,6 +495,7 @@ class TestRDIIModel(unittest.TestCase):
         m.prepare(df)
         result = m.predict()
         np.testing.assert_allclose(result["rdii_mm"].to_numpy(), 0.0, atol=1e-10)
+        np.testing.assert_allclose(result["rdii_cfs"].to_numpy(), 0.0, atol=1e-10)
 
     def test_predict_state_advances(self):
         m = self._prepared()
@@ -506,9 +516,7 @@ class TestRDIIModel(unittest.TestCase):
         for i in range(1, 4):
             m._scalar_parameters[f"R_{i}"].value = 0.0
         result2 = m.predict()
-        self.assertLess(
-            result2["rdii_mm"].sum(), result1["rdii_mm"].sum()
-        )
+        self.assertLess(result2["rdii_cfs"].sum(), result1["rdii_cfs"].sum())
 
     # --- finalize ---
 
@@ -536,6 +544,7 @@ class TestRDIIModel(unittest.TestCase):
     def test_n_triangles_one(self):
         m = self._prepared(n_triangles=1)
         result = m.predict()
+        self.assertIn("rdii_cfs", result.columns)
         self.assertIn("rdii_mm", result.columns)
 
     def test_n_triangles_ten(self):
@@ -545,36 +554,52 @@ class TestRDIIModel(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TestRDIIOptimizer  (skipped when pymoo is absent)
+# TestRDIICalibration  (replaces old TestRDIIOptimizer; uses generic API)
 # ---------------------------------------------------------------------------
 
-@unittest.skipUnless(HAS_PYMOO, "pymoo not installed — skipping optimizer tests")
-class TestRDIIOptimizer(unittest.TestCase):
+@unittest.skipUnless(HAS_PYMOO, "pymoo not installed — skipping calibration tests")
+class TestRDIICalibration(unittest.TestCase):
 
     def setUp(self):
+        from sparsehydro.calibration import (
+            CalibrationProblem, NSGAIISolver, NashSutcliffe, PeakWeightedMSE,
+        )
         self.sample_df = _make_sample_df()
         self.model = _prepared_model()
-        self.obs = np.abs(
-            np.random.default_rng(1).normal(5, 2, len(self.sample_df))
+        obs = np.abs(np.random.default_rng(1).normal(5, 2, len(self.sample_df)))
+        self._obs = obs
+        self._problem = CalibrationProblem(
+            model=self.model,
+            objectives=[PeakWeightedMSE(), NashSutcliffe()],
+            column_map={
+                "observed":  lambda _: obs,
+                "predicted": lambda df: df["rdii_cfs"].to_numpy(),
+            },
+        )
+        self._Solver = NSGAIISolver
+
+    def _run(self, pop_size: int = 10, n_gen: int = 3):
+        return self._Solver(pop_size=pop_size, n_gen=n_gen, seed=42).solve(
+            self._problem
         )
 
-    def _run(self, pop_size: int = 10, n_gen: int = 3) -> object:
-        from sparsehydro.rdii import RDIIOptimizer
-        opt = RDIIOptimizer(self.model, observed_flow=self.obs)
-        return opt.run(pop_size=pop_size, n_gen=n_gen, seed=42)
-
-    def test_optimizer_returns_calibration_result(self):
+    def test_returns_calibration_result(self):
         from sparsehydro.calibration import CalibrationResult
-        result = self._run()
-        self.assertIsInstance(result, CalibrationResult)
+        self.assertIsInstance(self._run(), CalibrationResult)
 
     def test_unprepared_model_raises(self):
-        from sparsehydro.rdii import RDIIOptimizer
+        from sparsehydro.calibration import CalibrationProblem, PeakWeightedMSE
         m = RDIIModel()
         m.initialize()
-        with self.assertRaises(RuntimeError) as ctx:
-            RDIIOptimizer(m, np.ones(10))
-        self.assertIn("PREPARED", str(ctx.exception))
+        with self.assertRaises(RuntimeError):
+            CalibrationProblem(
+                model=m,
+                objectives=[PeakWeightedMSE()],
+                column_map={
+                    "observed":  lambda _: np.ones(10),
+                    "predicted": lambda df: df["rdii_cfs"].to_numpy(),
+                },
+            )
 
     def test_history_length(self):
         result = self._run(n_gen=5)
@@ -627,14 +652,21 @@ class TestVisualization(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        from sparsehydro.rdii import RDIIOptimizer
+        from sparsehydro.calibration import (
+            CalibrationProblem, NSGAIISolver, NashSutcliffe, PeakWeightedMSE,
+        )
         cls.sample_df = _make_sample_df()
         cls.model = _prepared_model()
-        obs = np.abs(
-            np.random.default_rng(3).normal(3, 1, len(cls.sample_df))
+        obs = np.abs(np.random.default_rng(3).normal(3, 1, len(cls.sample_df)))
+        problem = CalibrationProblem(
+            model=cls.model,
+            objectives=[PeakWeightedMSE(), NashSutcliffe()],
+            column_map={
+                "observed":  lambda _: obs,
+                "predicted": lambda df: df["rdii_cfs"].to_numpy(),
+            },
         )
-        opt = RDIIOptimizer(cls.model, observed_flow=obs)
-        cls.opt_result = opt.run(pop_size=10, n_gen=4, seed=0)
+        cls.opt_result = NSGAIISolver(pop_size=10, n_gen=4, seed=0).solve(problem)
         cls.predict_result = cls.model.predict()
 
     def test_plot_timeseries_returns_figure(self):

@@ -23,7 +23,13 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinx_design",
     "myst_parser",
+    "sphinxcontrib.mermaid",
 ]
+
+# Mermaid — use CDN so no mermaid CLI install is needed
+mermaid_version = "10.9.0"
+mermaid_init_js = "mermaid.initialize({startOnLoad:true, theme:'default', securityLevel:'loose'});"
+mermaid_d3_zoom = True
 
 add_function_parentheses = True
 add_module_names = False
@@ -77,6 +83,10 @@ source_suffix = {
     ".md": "markdown",
 }
 
+# MyST — enable mermaid directive in .md files
+myst_fence_as_directive = ["mermaid"]
+myst_enable_extensions = ["colon_fence", "deflist", "fieldlist"]
+
 master_doc = "index"
 
 project = "sparsehydro"
@@ -94,7 +104,7 @@ intersphinx_mapping = {
     "torch": ("https://pytorch.org/docs/stable", None),
 }
 
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "rdii_design.md", "unithydrograph_strategy.md"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "rdii_design.md", "unithydrograph_strategy.md", "combined_model.md"]
 
 suppress_warnings = [
     "ref.myst",

@@ -9,7 +9,16 @@ description = "Interface specifications for parsimonious hydrological models"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-authors = [{ name = "Caleb Buahin", email = "cbuahin@hazenandsawyer.com" }]
+authors = [
+    { name = "Caleb Buahin", email = "cbuahin@hazenandsawyer.com" },
+    { name = "John Barton", email = "john.barton@cincinnati-oh.gov" },
+    { name = "Filipe Romero", email = "felipe.romero@cincinnati-oh.gov" },
+    { name = "Trent Schade", email = "trent.schade@cincinnati-oh.gov" },
+]
+maintainers = [
+    { name = "Caleb Buahin", email = "cbuahin@hazenandsawyer.com" },
+    { name = "Trent Schade", email = "trent.schade@cincinnati-oh.gov" },
+]
 keywords = ["hydrology", "parsimonious", "model", "calibration", "pytorch"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -41,6 +50,7 @@ docs = [
     "pydata-sphinx-theme>=0.15",
     "myst-parser>=3.0",
     "sphinx-design>=0.5",
+    "sphinxcontrib-mermaid>=0.9",
 ]
 dev = [
     "pytest>=7.0",

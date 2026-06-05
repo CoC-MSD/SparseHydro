@@ -2,26 +2,27 @@
 
 Public API
 ----------
-+------------------------------------+---------------------------------------------------+
-| Name                               | Description                                       |
-+====================================+===================================================+
-| :func:`plot_timeseries`            | Rainfall + observed/predicted dual-axis subplots  |
-| :func:`plot_residuals_scatter`     | Obs-vs-pred scatter, residual bars, autocorrelation|
-| :func:`plot_cumulative_volume`     | Cumulative sums + volume error                    |
-| :class:`VisualizationModel`        | IModel wrapper for time-series plots              |
-+------------------------------------+---------------------------------------------------+
-| :func:`plot_pareto_evolution`      | Animated Pareto front with generation slider      |
-| :func:`plot_parallel_coordinates`  | Parallel-axis trade-off explorer                  |
-| :func:`plot_objective_convergence` | Best-value line + percentile band per generation  |
-| :func:`plot_parameter_distributions`| Violin grid of Pareto parameter spread           |
-| :func:`plot_sensitivity_heatmap`   | Parameter–objective Pearson correlation heatmap   |
-| :func:`plot_pareto_scatter_matrix` | SPLOM of all objectives                           |
-+------------------------------------+---------------------------------------------------+
-| :func:`plot_rtk_shape`             | Unit hydrograph shape per RTKTriangle             |
-| :func:`plot_rdii_components`       | Stacked per-triangle RDII contributions           |
-+------------------------------------+---------------------------------------------------+
-| :func:`plot_calibration_dashboard` | Multi-panel offline HTML dashboard                |
-+------------------------------------+---------------------------------------------------+
++------------------------------------------+------------------------------------------------------+
+| Name                                     | Description                                          |
++==========================================+======================================================+
+| :func:`plot_timeseries`                  | Rainfall + observed/predicted dual-axis subplots     |
+| :func:`plot_residuals_scatter`           | Obs-vs-pred scatter, residual bars, autocorrelation  |
+| :func:`plot_cumulative_volume`           | Cumulative sums + volume error                       |
+| :func:`plot_calibration_timeseries`      | 2-row dashboard: exogenous + pred/obs + 1v1 scatter  |
+| :class:`VisualizationModel`              | IModel wrapper for time-series plots                 |
++------------------------------------------+------------------------------------------------------+
+| :func:`plot_pareto_evolution`            | Animated Pareto front with generation slider         |
+| :func:`plot_parallel_coordinates`        | Parallel-axis trade-off explorer                     |
+| :func:`plot_objective_convergence`       | Best-value line + percentile band per generation     |
+| :func:`plot_parameter_distributions`     | Violin grid of Pareto parameter spread               |
+| :func:`plot_sensitivity_heatmap`         | Parameter–objective Pearson correlation heatmap      |
+| :func:`plot_pareto_scatter_matrix`       | SPLOM of all objectives                              |
++------------------------------------------+------------------------------------------------------+
+| :func:`plot_rtk_shape`                   | Unit hydrograph shape per RTKTriangle                |
+| :func:`plot_rdii_components`             | Stacked per-triangle RDII contributions              |
++------------------------------------------+------------------------------------------------------+
+| :func:`plot_calibration_dashboard`       | Multi-panel offline HTML dashboard                   |
++------------------------------------------+------------------------------------------------------+
 
 All functions require the optional ``plotly`` dependency::
 
@@ -35,7 +36,10 @@ RDII-specific functions additionally require::
 try:
     from .timeseries import (
         VisualizationModel,
+        plot_calibration_timeseries,
         plot_cumulative_volume,
+        plot_data_explorer,
+        plot_ensemble_timeseries,
         plot_residuals_scatter,
         plot_timeseries,
     )
@@ -88,6 +92,12 @@ except ImportError:
     def plot_calibration_dashboard(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_calibration_dashboard. Install with: pip install plotly")
 
+    def plot_data_explorer(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_data_explorer. Install with: pip install plotly")
+
+    def plot_ensemble_timeseries(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_ensemble_timeseries. Install with: pip install plotly")
+
     from ..interfaces import IModel as _IModel  # noqa: E402
 
     class VisualizationModel(_IModel):  # type: ignore[no-redef]
@@ -114,6 +124,8 @@ __all__ = [
     "plot_timeseries",
     "plot_residuals_scatter",
     "plot_cumulative_volume",
+    "plot_data_explorer",
+    "plot_ensemble_timeseries",
     "VisualizationModel",
     # Calibration
     "plot_pareto_evolution",
