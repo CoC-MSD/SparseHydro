@@ -552,6 +552,44 @@ class TestRDIIModel(unittest.TestCase):
         result = m.predict()
         self.assertEqual(len(result), len(self.sample_df))
 
+    def test_cfs_volume_conservation_daily(self):
+        """CFS totals and depth totals must conserve volume regardless of timestep.
+
+        A single rainfall pulse of known depth should yield the same runoff volume
+        whether the model is run at hourly or daily resolution.
+        """
+        area = 500.0  # acres
+        rain_in = 1.0  # inch pulse
+
+        def run(dt_hours):
+            dates = pd.date_range("2020-01-01", periods=120, freq=f"{dt_hours}h")
+            rain = np.zeros(len(dates))
+            rain[5] = rain_in
+            df = pd.DataFrame({"datetime": dates, "rainfall_in": rain, "temperature_c": 15.0})
+            m = RDIIModel(n_triangles=1, units="imperial")
+            m.initialize()
+            m.get_scalar_parameter("ia_max").update(value=0.0, lower_bound=0.0)
+            m.get_scalar_parameter("ia_k_dep").update(value=0.0, lower_bound=0.0)
+            m.get_scalar_parameter("ia_T_freeze").update(value=-5.0)
+            m.get_scalar_parameter("R_1").update(value=1.0)
+            m.get_scalar_parameter("area_acres").update(value=area)
+            m.validate()
+            m.prepare(df)
+            result = m.predict()
+            dt_sec = dt_hours * 3600.0
+            cfs_vol = (result["rdii_cfs"] * dt_sec).sum()   # CFS-seconds
+            depth_sum = result["rdii_in"].sum()              # inches (depth per step summed)
+            return cfs_vol, depth_sum
+
+        vol_hourly, depth_hourly = run(1)
+        vol_daily,  depth_daily  = run(24)
+        # Both should equal: 1 in * area acres → ft³
+        expected_cfs_sec = rain_in / 12.0 * area * 43560.0
+        np.testing.assert_allclose(vol_hourly, expected_cfs_sec, rtol=1e-3)
+        np.testing.assert_allclose(vol_daily,  expected_cfs_sec, rtol=1e-3)
+        # rdii_in is depth per timestep — sums must be equal across resolutions
+        np.testing.assert_allclose(depth_hourly, depth_daily, rtol=1e-3)
+
 
 # ---------------------------------------------------------------------------
 # TestRDIICalibration  (replaces old TestRDIIOptimizer; uses generic API)

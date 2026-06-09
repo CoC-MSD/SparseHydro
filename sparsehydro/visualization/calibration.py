@@ -8,6 +8,7 @@ Public API (all conditional on plotly being installed):
 - :func:`plot_parameter_distributions`— violin plots of Pareto parameter values
 - :func:`plot_sensitivity_heatmap`    — parameter-objective Pearson correlation heat map
 - :func:`plot_pareto_scatter_matrix`  — scatter-plot matrix (SPLOM) of all objectives
+- :func:`plot_splom`                  — SPLOM of all final-generation solutions, non-dominated highlighted
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import math
 from typing import TYPE_CHECKING, Union
 
 import numpy as np
+import pandas as pd
 
 from ._utils import _display_col, _resolve_obj
 
@@ -520,6 +522,100 @@ try:
         )
         return fig
 
+    # ------------------------------------------------------------------
+    # plot_splom
+    # ------------------------------------------------------------------
+
+    def plot_splom(
+        result: "CalibrationResult",
+        space: str = "objectives",
+        title: str = "SPLOM — Non-Dominated Solutions Highlighted",
+    ) -> go.Figure:
+        """Scatter-plot matrix highlighting non-dominated vs dominated solutions.
+
+        Draws the full final-generation population as a SPLOM.  Dominated
+        solutions are shown in grey at low opacity; non-dominated (Pareto-front)
+        solutions are overlaid in orange at full opacity.
+
+        :param result: Calibration result with per-generation history.
+        :type result: CalibrationResult
+        :param space: Which dimensions to display — ``"objectives"`` (default)
+            or ``"parameters"``.
+        :type space: str
+        :param title: Figure title.
+        :returns: Plotly Figure with two ``go.Splom`` traces.
+        :rtype: plotly.graph_objects.Figure
+        :raises ValueError: If *space* is not ``"objectives"`` or ``"parameters"``.
+        """
+        if space not in ("objectives", "parameters"):
+            raise ValueError(
+                f"space must be 'objectives' or 'parameters', got {space!r}"
+            )
+
+        cols = result.objective_names if space == "objectives" else result.param_names
+
+        df = result.to_pareto_dataframe()
+
+        if df.empty:
+            # No history recorded — treat all pareto solutions as non-dominated.
+            if space == "objectives":
+                F_disp = result.objective_display_values()
+                data = {c: F_disp[:, j].tolist() for j, c in enumerate(cols)}
+            else:
+                data = {c: result.pareto_X[:, j].tolist() for j, c in enumerate(cols)}
+            df_final = pd.DataFrame(data)
+            df_final["is_pareto"] = True
+        else:
+            last_gen = int(df["generation"].max())
+            df_final = df[df["generation"] == last_gen].copy()
+
+        dominated = df_final[~df_final["is_pareto"]]
+        non_dominated = df_final[df_final["is_pareto"]]
+
+        def _dims(sub: pd.DataFrame) -> list:
+            return [dict(label=c, values=sub[c].tolist()) for c in cols]
+
+        traces: list = []
+
+        if not dominated.empty:
+            traces.append(
+                go.Splom(
+                    dimensions=_dims(dominated),
+                    name="Dominated",
+                    showlegend=True,
+                    showupperhalf=False,
+                    diagonal_visible=True,
+                    marker=dict(color="rgba(150,150,150,0.3)", size=4, line=dict(width=0)),
+                )
+            )
+
+        if not non_dominated.empty:
+            traces.append(
+                go.Splom(
+                    dimensions=_dims(non_dominated),
+                    name="Non-dominated",
+                    showlegend=True,
+                    showupperhalf=False,
+                    diagonal_visible=True,
+                    marker=dict(
+                        color="#ff7f0e",
+                        size=7,
+                        opacity=0.85,
+                        line=dict(width=0.5, color="white"),
+                    ),
+                )
+            )
+
+        n_dim = len(cols)
+        fig = go.Figure(data=traces)
+        fig.update_layout(
+            title=title,
+            height=max(400, 180 * n_dim),
+            dragmode="select",
+            legend=dict(itemsizing="constant"),
+        )
+        return fig
+
 except ImportError:
 
     def plot_pareto_evolution(*args, **kwargs):  # type: ignore[misc]
@@ -539,3 +635,6 @@ except ImportError:
 
     def plot_pareto_scatter_matrix(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_pareto_scatter_matrix. Install with: pip install plotly")
+
+    def plot_splom(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_splom. Install with: pip install plotly")

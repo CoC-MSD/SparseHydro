@@ -283,12 +283,15 @@ class RDIIModel(IModel):
         rdii = np.clip(rdii, 0.0, None)
 
         area_acres = self.get_scalar_parameter("area_acres").value
-        rdii_cfs = rdii * area_acres * self._depth_to_cfs / self._dt_hours
+        # rdii is in [depth/hr]; multiply by dt_hours to get depth per timestep,
+        # and by depth_to_cfs * area to get instantaneous flow rate [CFS].
+        rdii_cfs = rdii * area_acres * self._depth_to_cfs
+        rdii_depth = rdii * self._dt_hours
 
         result = pd.DataFrame({
             "datetime": self._prepared_df["datetime"].values,
             "rdii_cfs": rdii_cfs,
-            self._depth_col: rdii,
+            self._depth_col: rdii_depth,
             self._excess_col: self._p_excess.copy(),
         })
         self._state = ModelState.PREDICTED

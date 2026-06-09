@@ -17,6 +17,7 @@ Public API
 | :func:`plot_parameter_distributions`     | Violin grid of Pareto parameter spread               |
 | :func:`plot_sensitivity_heatmap`         | Parameter–objective Pearson correlation heatmap      |
 | :func:`plot_pareto_scatter_matrix`       | SPLOM of all objectives                              |
+| :func:`plot_splom`                       | SPLOM of all solutions with non-dominated highlighted|
 +------------------------------------------+------------------------------------------------------+
 | :func:`plot_rtk_shape`                   | Unit hydrograph shape per RTKTriangle                |
 | :func:`plot_rdii_components`             | Stacked per-triangle RDII contributions              |
@@ -50,6 +51,7 @@ try:
         plot_pareto_evolution,
         plot_pareto_scatter_matrix,
         plot_sensitivity_heatmap,
+        plot_splom,
     )
     from .rdii import plot_rdii_components, plot_rtk_shape
     from .dashboard import plot_calibration_dashboard
@@ -82,6 +84,9 @@ except ImportError:
 
     def plot_pareto_scatter_matrix(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_pareto_scatter_matrix. Install with: pip install plotly")
+
+    def plot_splom(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_splom. Install with: pip install plotly")
 
     def plot_rtk_shape(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_rtk_shape. Install with: pip install plotly")
@@ -134,6 +139,7 @@ __all__ = [
     "plot_parameter_distributions",
     "plot_sensitivity_heatmap",
     "plot_pareto_scatter_matrix",
+    "plot_splom",
     # RDII
     "plot_rtk_shape",
     "plot_rdii_components",

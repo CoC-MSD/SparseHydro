@@ -520,11 +520,12 @@ try:
     ) -> "go.Figure":
         """Two-row calibration dashboard with linked time axes.
 
-        **Row 1 (full width)** — Exogenous inputs.  All entries in *exogenous*
-        that share the same ``units`` string are overlaid on one y-axis; each
-        unique unit gets its own secondary/tertiary axis.  Traces whose label
-        contains "rain" or "precip" (case-insensitive) are rendered as **inverted
-        bars** (downward); everything else is a line.
+        **Row 1 (full width)** — Exogenous inputs.  Every entry in *exogenous*
+        is normalised to [0, 1] and overlaid on a single shared y-axis.  The
+        legend label for each trace includes the original value range and units
+        (e.g. ``Rainfall [0-12.3 mm]``).  Traces whose label contains "rain"
+        or "precip" (case-insensitive) are rendered as bars; everything else is
+        a line.
 
         **Row 2 Left** — Predicted vs Observed time series.  If
         *pareto_predictions* is supplied, a shaded IQR band (between
@@ -534,7 +535,7 @@ try:
         *pareto_predictions* is supplied, vertical box-whiskers summarise the
         Pareto range at each time step.  A dashed 45° "perfect fit" line is
         always drawn.  Optional *tolerance_angles* draw additional lines
-        radiating from the origin at ``45° ± θ``.
+        radiating from the origin at ``45° +/- theta``.
 
         The x-axes of row 1 and row 2-left are **linked**: zooming or panning
         either panel pans the other.
@@ -544,8 +545,8 @@ try:
         :param observed: 1-D array of observed values.
         :param predicted: 1-D array of predicted values (best solution).
         :param exogenous: ``{label: (values_array, units_string)}`` mapping.
-            Traces with the same *units_string* share a y-axis.  Rainfall-like
-            traces (label contains "rain" / "precip") are plotted as inverted bars.
+            All traces are normalised to [0, 1] on a shared y-axis.  Rainfall-like
+            traces (label contains "rain" / "precip") are plotted as bars.
         :param pareto_predictions: Array of shape ``(n_solutions, n_timesteps)``
             containing all Pareto-front predictions.  Used for the IQR band and
             scatter box-whiskers.
@@ -580,27 +581,25 @@ try:
         )
 
         # ── Row 1: exogenous traces ──────────────────────────────────────
-        # Group by units → shared axis index
-        unit_to_axis: dict[str, int] = {}
-        axis_idx = 1  # yaxis on row-1 subplot; extra axes are overlaid
-
+        # All inputs are normalized to [0, 1] and share a single y-axis.
+        # The legend label carries the original min–max range and units.
         for label, (values, units) in exogenous.items():
             values = np.asarray(values, dtype=float)
             is_rain = any(kw in label.lower() for kw in ("rain", "precip")) or \
                       any(kw in rainfall_label.lower() for kw in ("rain", "precip"))
 
-            if units not in unit_to_axis:
-                unit_to_axis[units] = axis_idx
-                axis_idx += 1
+            v_min, v_max = float(np.nanmin(values)), float(np.nanmax(values))
+            v_range = v_max - v_min
+            normalized = (values - v_min) / v_range if v_range > 0 else np.zeros_like(values)
 
-            yref = "y" if unit_to_axis[units] == 1 else f"y{unit_to_axis[units]}"
+            range_str = f"{v_min:.3g}–{v_max:.3g}"
+            full_label = f"{label} [{range_str} {units}]" if units else f"{label} [{range_str}]"
 
             if is_rain:
                 fig.add_trace(
                     go.Bar(
-                        x=dt_series, y=-values,
-                        name=label,
-                        yaxis=yref,
+                        x=dt_series, y=normalized,
+                        name=full_label,
                         marker_opacity=0.7,
                         showlegend=True,
                     ),
@@ -609,12 +608,13 @@ try:
             else:
                 fig.add_trace(
                     go.Scatter(
-                        x=dt_series, y=values,
-                        mode="lines", name=label,
-                        yaxis=yref,
+                        x=dt_series, y=normalized,
+                        mode="lines", name=full_label,
                     ),
                     row=1, col=1,
                 )
+
+        fig.update_yaxes(title_text="Normalized [0–1]", range=[0, 1], row=1, col=1)
 
         # ── Row 2 Left: predicted vs observed time series ────────────────
         if pareto_predictions is not None:
