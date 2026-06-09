@@ -45,34 +45,49 @@ class IAModel(IModel):
     registry and are kept in sync with the instance attributes used by the
     physics methods.
 
-    :param ia_max: Maximum abstraction capacity [mm].
+    :param ia_max: Maximum abstraction capacity.  Defaults to 0.2 in (imperial)
+        or 5.0 mm (metric).  Pass ``None`` to use the unit-appropriate default.
     :param k0: Base recovery rate constant [1/hr].
     :param kT: Temperature-dependent recovery coefficient [1/hr].
     :param theta: Temperature sensitivity exponent [1/°C].
     :param T_ref: Reference temperature [°C].
-    :param k_dep: Depletion rate constant [1/mm].
+    :param k_dep: Depletion rate constant.  Defaults to 7.62 /in (imperial)
+        or 0.3 /mm (metric).  Pass ``None`` to use the unit-appropriate default.
     :param T_freeze: Temperature below which recovery is suppressed [°C].
+    :param units: Unit system — ``"imperial"`` (default, inches) or ``"metric"`` (mm).
     """
 
     model_name = "initial-abstraction"
 
     def __init__(
         self,
-        ia_max: float = 5.0,
+        ia_max: float | None = None,
         k0: float = 0.05,
         kT: float = 0.02,
         theta: float = 0.1,
         T_ref: float = 20.0,
-        k_dep: float = 0.3,
+        k_dep: float | None = None,
         T_freeze: float = 0.0,
+        units: str = "imperial",
     ) -> None:
         super().__init__()
-        self.ia_max = float(ia_max)
+        if units not in ("imperial", "metric"):
+            raise ValueError(f"units must be 'imperial' or 'metric'; got {units!r}")
+        self._units = units
+        self._rainfall_col = "rainfall_in" if units == "imperial" else "rainfall_mm"
+        self._excess_col = "p_excess_in" if units == "imperial" else "p_excess_mm"
+
+        if units == "imperial":
+            self.ia_max = float(ia_max) if ia_max is not None else 0.2
+            self.k_dep = float(k_dep) if k_dep is not None else 7.62
+        else:
+            self.ia_max = float(ia_max) if ia_max is not None else 5.0
+            self.k_dep = float(k_dep) if k_dep is not None else 0.3
+
         self.k0 = float(k0)
         self.kT = float(kT)
         self.theta = float(theta)
         self.T_ref = float(T_ref)
-        self.k_dep = float(k_dep)
         self.T_freeze = float(T_freeze)
         self.ia_avail: float = self.ia_max
         self._prepared_df: pd.DataFrame | None = None
@@ -83,9 +98,18 @@ class IAModel(IModel):
 
     def initialize(self) -> None:
         """Register all IA scalar parameters and advance to INITIALIZED."""
+        if self._units == "imperial":
+            ia_max_lb, ia_max_ub, ia_max_units = 0.004, 2.0, "in"
+            ia_kdep_lb, ia_kdep_ub, ia_kdep_units = 0.25, 127.0, "1/in"
+            ia_kdep_desc = "Depletion rate per inch of rainfall"
+        else:
+            ia_max_lb, ia_max_ub, ia_max_units = 0.1, 50.0, "mm"
+            ia_kdep_lb, ia_kdep_ub, ia_kdep_units = 0.01, 5.0, "1/mm"
+            ia_kdep_desc = "Depletion rate per mm of rainfall"
+
         self.register_scalar_parameter(ScalarParameter(
-            "ia_max", value=self.ia_max, lower_bound=0.1, upper_bound=50.0,
-            units="mm", description="Maximum initial abstraction capacity",
+            "ia_max", value=self.ia_max, lower_bound=ia_max_lb, upper_bound=ia_max_ub,
+            units=ia_max_units, description="Maximum initial abstraction capacity",
         ))
         self.register_scalar_parameter(ScalarParameter(
             "ia_k0", value=self.k0, lower_bound=0.001, upper_bound=1.0,
@@ -104,8 +128,8 @@ class IAModel(IModel):
             units="degC", description="Reference temperature for ET scaling",
         ))
         self.register_scalar_parameter(ScalarParameter(
-            "ia_k_dep", value=self.k_dep, lower_bound=0.01, upper_bound=5.0,
-            units="1/mm", description="Depletion rate per mm of rainfall",
+            "ia_k_dep", value=self.k_dep, lower_bound=ia_kdep_lb, upper_bound=ia_kdep_ub,
+            units=ia_kdep_units, description=ia_kdep_desc,
         ))
         self.register_scalar_parameter(ScalarParameter(
             "ia_T_freeze", value=self.T_freeze, lower_bound=-5.0, upper_bound=5.0,
@@ -131,12 +155,13 @@ class IAModel(IModel):
     def prepare(self, data: pd.DataFrame) -> None:
         """Load forcing data and sync parameters from the registry.
 
-        :param data: DataFrame with columns ``datetime``, ``rainfall_mm``,
+        :param data: DataFrame with columns ``datetime``,
+            ``rainfall_in`` (imperial) or ``rainfall_mm`` (metric),
             and optionally ``temperature_c``.
         :type data: pandas.DataFrame
         :raises ValueError: If required columns are absent.
         """
-        required = {"datetime", "rainfall_mm"}
+        required = {"datetime", self._rainfall_col}
         missing = required - set(data.columns)
         if missing:
             raise ValueError(
@@ -144,7 +169,7 @@ class IAModel(IModel):
             )
 
         df = data.sort_values("datetime").reset_index(drop=True).copy()
-        df["rainfall_mm"] = df["rainfall_mm"].fillna(0.0).clip(lower=0.0)
+        df[self._rainfall_col] = df[self._rainfall_col].fillna(0.0).clip(lower=0.0)
 
         T_ref = self.get_scalar_parameter("ia_T_ref").value
         if "temperature_c" not in df.columns:
@@ -178,7 +203,7 @@ class IAModel(IModel):
         dt_arr = np.full(len(df), dt_hours)
 
         excess = IAModel.compute_excess_series(
-            rainfall_mm=df["rainfall_mm"].to_numpy(dtype=float),
+            rainfall_mm=df[self._rainfall_col].to_numpy(dtype=float),
             dt_hours=dt_arr,
             temperature=df["temperature_c"].to_numpy(dtype=float),
             ia_max=self.ia_max,
@@ -192,7 +217,7 @@ class IAModel(IModel):
 
         result = pd.DataFrame({
             "datetime": df["datetime"].values,
-            "p_excess_mm": excess,
+            self._excess_col: excess,
         })
         self._state = ModelState.PREDICTED
         return result

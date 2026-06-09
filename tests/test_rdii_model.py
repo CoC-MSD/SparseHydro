@@ -62,8 +62,8 @@ def _make_sample_df(n: int = 48) -> pd.DataFrame:
 
 
 def _prepared_model(n_triangles: int = 3) -> RDIIModel:
-    """Return a fully prepared RDIIModel using the sample DataFrame."""
-    m = RDIIModel(n_triangles=n_triangles)
+    """Return a fully prepared RDIIModel using the sample DataFrame (metric)."""
+    m = RDIIModel(n_triangles=n_triangles, units="metric")
     m.initialize()
     m.validate()
     m.prepare(_make_sample_df())
@@ -348,7 +348,7 @@ class TestRDIIModel(unittest.TestCase):
         self.sample_df = _make_sample_df()
 
     def _prepared(self, n_triangles: int = 3) -> RDIIModel:
-        m = RDIIModel(n_triangles=n_triangles)
+        m = RDIIModel(n_triangles=n_triangles, units="metric")
         m.initialize()
         self.assertTrue(m.validate())
         m.prepare(self.sample_df)
@@ -453,7 +453,7 @@ class TestRDIIModel(unittest.TestCase):
         self.assertIn("missing required columns", str(ctx.exception))
 
     def test_prepare_fills_temperature_with_T_ref(self):
-        m = RDIIModel()
+        m = RDIIModel(units="metric")
         m.initialize()
         m.validate()
         df = self.sample_df.drop(columns=["temperature_c"])
@@ -489,7 +489,7 @@ class TestRDIIModel(unittest.TestCase):
             "datetime": pd.date_range("2024-01-01", periods=n, freq="h"),
             "rainfall_mm": np.zeros(n),
         })
-        m = RDIIModel()
+        m = RDIIModel(units="metric")
         m.initialize()
         m.validate()
         m.prepare(df)
@@ -532,7 +532,7 @@ class TestRDIIModel(unittest.TestCase):
     # --- full lifecycle ---
 
     def test_full_lifecycle(self):
-        m = RDIIModel(n_triangles=2)
+        m = RDIIModel(n_triangles=2, units="metric")
         m.initialize()
         self.assertTrue(m.validate())
         m.prepare(self.sample_df)

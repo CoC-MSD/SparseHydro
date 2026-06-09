@@ -271,6 +271,45 @@ class IModel(ABC):
             )
         return self._vector_parameters[name]
 
+    def rename_scalar_parameter(self, old_name: str, new_name: str) -> None:
+        """Rename a registered scalar parameter.
+
+        Updates both the registry key and the parameter's ``name`` field.
+        The parameter object itself is unchanged apart from its name.
+
+        :param old_name: Current parameter name.
+        :type old_name: str
+        :param new_name: Desired new name.
+        :type new_name: str
+        :raises KeyError: If ``old_name`` is not registered.
+        :raises ValueError: If ``new_name`` is already registered.
+        """
+        if new_name in self._scalar_parameters:
+            raise ValueError(f"Scalar parameter '{new_name}' already exists.")
+        param = self.get_scalar_parameter(old_name)
+        param.name = new_name
+        self._scalar_parameters[new_name] = param
+        del self._scalar_parameters[old_name]
+
+    def rename_vector_parameter(self, old_name: str, new_name: str) -> None:
+        """Rename a registered vector parameter.
+
+        Updates both the registry key and the parameter's ``name`` field.
+
+        :param old_name: Current parameter name.
+        :type old_name: str
+        :param new_name: Desired new name.
+        :type new_name: str
+        :raises KeyError: If ``old_name`` is not registered.
+        :raises ValueError: If ``new_name`` is already registered.
+        """
+        if new_name in self._vector_parameters:
+            raise ValueError(f"Vector parameter '{new_name}' already exists.")
+        param = self.get_vector_parameter(old_name)
+        param.name = new_name
+        self._vector_parameters[new_name] = param
+        del self._vector_parameters[old_name]
+
     @property
     def scalar_parameter_names(self) -> list[str]:
         """Ordered list of registered scalar parameter names.

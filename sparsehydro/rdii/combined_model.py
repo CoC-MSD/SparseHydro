@@ -47,6 +47,7 @@ _DEFAULT_RTK = [
 
 _FFT_THRESHOLD = 500
 _MM_AC_PER_HR_TO_CFS = 43560.0 / (304.8 * 3600.0)
+_IN_AC_PER_HR_TO_CFS = 43560.0 / (12.0 * 3600.0)
 
 
 @registry.register
@@ -91,9 +92,18 @@ class CombinedHydroModel(IModel):
         self,
         ia_model: IModel | None = None,
         uh_components: list[IUnitHydroComponent] | None = None,
+        units: str = "imperial",
     ) -> None:
         super().__init__()
-        self._ia_model: IModel = ia_model if ia_model is not None else IAModel()
+        if units not in ("imperial", "metric"):
+            raise ValueError(f"units must be 'imperial' or 'metric'; got {units!r}")
+        self._units = units
+        self._rainfall_col = "rainfall_in" if units == "imperial" else "rainfall_mm"
+        self._excess_col = "p_excess_in" if units == "imperial" else "p_excess_mm"
+        self._depth_col = "rdii_in" if units == "imperial" else "rdii_mm"
+        self._depth_to_cfs = _IN_AC_PER_HR_TO_CFS if units == "imperial" else _MM_AC_PER_HR_TO_CFS
+
+        self._ia_model: IModel = ia_model if ia_model is not None else IAModel(units=units)
         if uh_components is None:
             self._uh_components: list[IUnitHydroComponent] = [
                 RTKTriangle(R=R, T=T, K=K) for R, T, K in _DEFAULT_RTK
@@ -104,8 +114,8 @@ class CombinedHydroModel(IModel):
         self._prepared_df: pd.DataFrame | None = None
         self._dt_hours: float = 1.0
 
-        # Populated during initialize(); used for parameter sync
-        self._ia_param_names: list[str] = []
+        # Populated during initialize(); maps ia_orig_name -> composite_name
+        self._ia_param_name_map: dict[str, str] = {}
         # List of {orig_name: composite_name} for each UH component
         self._uh_param_maps: list[dict[str, str]] = []
 
@@ -150,8 +160,10 @@ class CombinedHydroModel(IModel):
             ))
 
         # --- IA model parameters (re-registered with original names) ---
-        self._ia_param_names = list(self._ia_model.scalar_parameter_names)
-        for name in self._ia_param_names:
+        self._ia_param_name_map = {
+            name: name for name in self._ia_model.scalar_parameter_names
+        }
+        for name in self._ia_param_name_map:
             p = self._ia_model.get_scalar_parameter(name)
             self.register_scalar_parameter(ScalarParameter(
                 p.name, p.value, p.lower_bound, p.upper_bound,
@@ -210,7 +222,7 @@ class CombinedHydroModel(IModel):
         :type data: pandas.DataFrame
         :raises ValueError: If required columns are absent or dt cannot be inferred.
         """
-        required = {"datetime", "rainfall_mm"}
+        required = {"datetime", self._rainfall_col}
         missing = required - set(data.columns)
         if missing:
             raise ValueError(
@@ -218,7 +230,7 @@ class CombinedHydroModel(IModel):
             )
 
         df = data.sort_values("datetime").reset_index(drop=True).copy()
-        df["rainfall_mm"] = df["rainfall_mm"].fillna(0.0).clip(lower=0.0)
+        df[self._rainfall_col] = df[self._rainfall_col].fillna(0.0).clip(lower=0.0)
 
         diffs = df["datetime"].diff().dropna()
         if len(diffs) == 0:
@@ -269,12 +281,12 @@ class CombinedHydroModel(IModel):
         self._sync_to_submodels()
 
         ia_result = self._ia_model.predict()
-        if "p_excess_mm" not in ia_result.columns:
+        if self._excess_col not in ia_result.columns:
             raise RuntimeError(
-                "ia_model.predict() must return a DataFrame with a "
-                f"'p_excess_mm' column; got columns: {list(ia_result.columns)}"
+                f"ia_model.predict() must return a DataFrame with a "
+                f"'{self._excess_col}' column; got columns: {list(ia_result.columns)}"
             )
-        p_excess = ia_result["p_excess_mm"].to_numpy(dtype=float)
+        p_excess = ia_result[self._excess_col].to_numpy(dtype=float)
         n = len(p_excess)
         rdii = np.zeros(n, dtype=float)
 
@@ -291,13 +303,13 @@ class CombinedHydroModel(IModel):
 
         rdii = np.clip(rdii, 0.0, None)
         area_acres = self.get_scalar_parameter("area_acres").value
-        rdii_cfs = rdii * area_acres * _MM_AC_PER_HR_TO_CFS / self._dt_hours
+        rdii_cfs = rdii * area_acres * self._depth_to_cfs / self._dt_hours
 
         result = pd.DataFrame({
             "datetime": self._prepared_df["datetime"].values,
             "rdii_cfs": rdii_cfs,
-            "rdii_mm": rdii,
-            "p_excess_mm": p_excess.copy(),
+            self._depth_col: rdii,
+            self._excess_col: p_excess.copy(),
         })
         self._state = ModelState.PREDICTED
         return result
@@ -332,11 +344,11 @@ class CombinedHydroModel(IModel):
     def _sync_to_submodels(self) -> None:
         """Push composite registry values to sub-model registries."""
         # IA model parameters
-        for name in self._ia_param_names:
-            if name in self._scalar_parameters:
+        for ia_name, composite_name in self._ia_param_name_map.items():
+            if composite_name in self._scalar_parameters:
                 try:
-                    self._ia_model.get_scalar_parameter(name).value = (
-                        self.get_scalar_parameter(name).value
+                    self._ia_model.get_scalar_parameter(ia_name).value = (
+                        self.get_scalar_parameter(composite_name).value
                     )
                 except KeyError:
                     pass
@@ -361,6 +373,24 @@ class CombinedHydroModel(IModel):
                     )
                 except KeyError:
                     pass
+
+    def rename_scalar_parameter(self, old_name: str, new_name: str) -> None:
+        """Rename a scalar parameter and keep internal sync maps up to date.
+
+        Delegates to the base implementation, then patches ``_ia_param_name_map``
+        and ``_uh_param_maps`` so that :meth:`_sync_to_submodels` continues to
+        work correctly after the rename.
+        """
+        super().rename_scalar_parameter(old_name, new_name)
+        for ia_name, composite in self._ia_param_name_map.items():
+            if composite == old_name:
+                self._ia_param_name_map[ia_name] = new_name
+                break
+        for mapping in self._uh_param_maps:
+            for orig, composite in mapping.items():
+                if composite == old_name:
+                    mapping[orig] = new_name
+                    break
 
 
 def _amplitude_default(uh: IUnitHydroComponent) -> float:

@@ -94,6 +94,48 @@ class ScalarParameter:
             calibrate=self.calibrate,
         )
 
+    def update(
+        self,
+        *,
+        value: float | None = None,
+        lower_bound: float | None = None,
+        upper_bound: float | None = None,
+        units: str | None = None,
+        description: str | None = None,
+        calibrate: bool | None = None,
+    ) -> None:
+        """Update one or more mutable attributes in-place.
+
+        Only the keyword arguments you supply are changed; others are left
+        untouched.  Raises :class:`ValueError` if the resulting bounds are
+        invalid (``lower_bound > upper_bound``).
+
+        :param value: New parameter value.
+        :param lower_bound: New lower bound.
+        :param upper_bound: New upper bound.
+        :param units: New units string (e.g. ``"in"``, ``"m/s"``).
+        :param description: New human-readable description.
+        :param calibrate: New calibration flag.
+        :raises ValueError: If ``lower_bound > upper_bound`` after the update.
+        """
+        if value is not None:
+            self.value = float(value)
+        if lower_bound is not None:
+            self.lower_bound = float(lower_bound)
+        if upper_bound is not None:
+            self.upper_bound = float(upper_bound)
+        if units is not None:
+            self.units = units
+        if description is not None:
+            self.description = description
+        if calibrate is not None:
+            self.calibrate = bool(calibrate)
+        if self.lower_bound > self.upper_bound:
+            raise ValueError(
+                f"Parameter '{self.name}': lower_bound ({self.lower_bound}) "
+                f"must be <= upper_bound ({self.upper_bound})."
+            )
+
 
 @dataclass
 class ConstraintRecord:
@@ -237,3 +279,37 @@ class VectorParameter:
             units=self.units,
             description=self.description,
         )
+
+    def update(
+        self,
+        *,
+        values: np.ndarray | None = None,
+        lower_bounds: np.ndarray | None = None,
+        upper_bounds: np.ndarray | None = None,
+        units: str | None = None,
+        description: str | None = None,
+    ) -> None:
+        """Update one or more mutable attributes in-place.
+
+        Only the keyword arguments you supply are changed; others are left
+        untouched.  Scalar bounds are broadcast to the vector length.
+        Raises :class:`ValueError` if the resulting bounds or shape are invalid.
+
+        :param values: New values array (must match current length).
+        :param lower_bounds: New lower bounds (scalar broadcast supported).
+        :param upper_bounds: New upper bounds (scalar broadcast supported).
+        :param units: New units string.
+        :param description: New human-readable description.
+        :raises ValueError: If the resulting configuration is invalid.
+        """
+        if values is not None:
+            self.values = np.asarray(values, dtype=float)
+        if lower_bounds is not None:
+            self.lower_bounds = np.asarray(lower_bounds, dtype=float)
+        if upper_bounds is not None:
+            self.upper_bounds = np.asarray(upper_bounds, dtype=float)
+        if units is not None:
+            self.units = units
+        if description is not None:
+            self.description = description
+        self.__post_init__()

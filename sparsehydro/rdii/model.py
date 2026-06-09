@@ -49,9 +49,11 @@ _DEFAULT_RTK = [
 
 _FFT_THRESHOLD = 500  # switch to fftconvolve when max(n, m) exceeds this
 
-# mm of depth over 1 acre for 1 hour → CFS
-# = (43560 ft²/ac) / (304.8 mm/ft) / (3600 s/hr) ≈ 0.03970
+# depth over 1 acre for 1 hour → CFS
+# mm: (43560 ft²/ac) / (304.8 mm/ft) / (3600 s/hr) ≈ 0.03970
+# in: (43560 ft²/ac) / (12 in/ft)    / (3600 s/hr) ≈ 1.00833
 _MM_AC_PER_HR_TO_CFS = 43560.0 / (304.8 * 3600.0)
+_IN_AC_PER_HR_TO_CFS = 43560.0 / (12.0 * 3600.0)
 
 
 @registry.register
@@ -74,11 +76,18 @@ class RDIIModel(IModel):
 
     model_name = "rdii"
 
-    def __init__(self, n_triangles: int = 3) -> None:
+    def __init__(self, n_triangles: int = 3, units: str = "imperial") -> None:
         super().__init__()
         if n_triangles < 1:
             raise ValueError(f"n_triangles must be >= 1; got {n_triangles!r}")
+        if units not in ("imperial", "metric"):
+            raise ValueError(f"units must be 'imperial' or 'metric'; got {units!r}")
         self.n_triangles: int = n_triangles
+        self._units = units
+        self._rainfall_col = "rainfall_in" if units == "imperial" else "rainfall_mm"
+        self._excess_col = "p_excess_in" if units == "imperial" else "p_excess_mm"
+        self._depth_col = "rdii_in" if units == "imperial" else "rdii_mm"
+        self._depth_to_cfs = _IN_AC_PER_HR_TO_CFS if units == "imperial" else _MM_AC_PER_HR_TO_CFS
         self._triangles: list[RTKTriangle] = []
         self._prepared_df: pd.DataFrame | None = None
         self._p_excess: np.ndarray | None = None
@@ -101,9 +110,18 @@ class RDIIModel(IModel):
             self.n_triangles = n_triangles
 
         # --- Initial Abstraction parameters ---
+        if self._units == "imperial":
+            ia_max_v, ia_max_lb, ia_max_ub, ia_max_u = 0.2, 0.004, 2.0, "in"
+            ia_kdep_v, ia_kdep_lb, ia_kdep_ub, ia_kdep_u = 7.62, 0.25, 127.0, "1/in"
+            ia_kdep_desc = "Depletion rate per inch of rainfall"
+        else:
+            ia_max_v, ia_max_lb, ia_max_ub, ia_max_u = 5.0, 0.1, 50.0, "mm"
+            ia_kdep_v, ia_kdep_lb, ia_kdep_ub, ia_kdep_u = 0.3, 0.01, 5.0, "1/mm"
+            ia_kdep_desc = "Depletion rate per mm of rainfall"
+
         self.register_scalar_parameter(ScalarParameter(
-            "ia_max", value=5.0, lower_bound=0.1, upper_bound=50.0,
-            units="mm", description="Maximum initial abstraction capacity",
+            "ia_max", value=ia_max_v, lower_bound=ia_max_lb, upper_bound=ia_max_ub,
+            units=ia_max_u, description="Maximum initial abstraction capacity",
         ))
         self.register_scalar_parameter(ScalarParameter(
             "ia_k0", value=0.05, lower_bound=0.001, upper_bound=1.0,
@@ -122,8 +140,8 @@ class RDIIModel(IModel):
             units="degC", description="Reference temperature for ET scaling",
         ))
         self.register_scalar_parameter(ScalarParameter(
-            "ia_k_dep", value=0.3, lower_bound=0.01, upper_bound=5.0,
-            units="1/mm", description="Depletion rate per mm of rainfall",
+            "ia_k_dep", value=ia_kdep_v, lower_bound=ia_kdep_lb, upper_bound=ia_kdep_ub,
+            units=ia_kdep_u, description=ia_kdep_desc,
         ))
         self.register_scalar_parameter(ScalarParameter(
             "ia_T_freeze", value=0.0, lower_bound=-5.0, upper_bound=5.0,
@@ -192,7 +210,7 @@ class RDIIModel(IModel):
         :raises ValueError: If required columns are absent or dt cannot be
             inferred.
         """
-        required = {"datetime", "rainfall_mm"}
+        required = {"datetime", self._rainfall_col}
         missing = required - set(data.columns)
         if missing:
             raise ValueError(
@@ -200,7 +218,7 @@ class RDIIModel(IModel):
             )
 
         df = data.sort_values("datetime").reset_index(drop=True).copy()
-        df["rainfall_mm"] = df["rainfall_mm"].fillna(0.0).clip(lower=0.0)
+        df[self._rainfall_col] = df[self._rainfall_col].fillna(0.0).clip(lower=0.0)
 
         # Infer dt_hours from median inter-row timedelta
         diffs = df["datetime"].diff().dropna()
@@ -265,13 +283,13 @@ class RDIIModel(IModel):
         rdii = np.clip(rdii, 0.0, None)
 
         area_acres = self.get_scalar_parameter("area_acres").value
-        rdii_cfs = rdii * area_acres * _MM_AC_PER_HR_TO_CFS / self._dt_hours
+        rdii_cfs = rdii * area_acres * self._depth_to_cfs / self._dt_hours
 
         result = pd.DataFrame({
             "datetime": self._prepared_df["datetime"].values,
             "rdii_cfs": rdii_cfs,
-            "rdii_mm": rdii,
-            "p_excess_mm": self._p_excess.copy(),
+            self._depth_col: rdii,
+            self._excess_col: self._p_excess.copy(),
         })
         self._state = ModelState.PREDICTED
         return result
@@ -326,7 +344,7 @@ class RDIIModel(IModel):
     def _compute_ia_excess(self, df: pd.DataFrame) -> np.ndarray:
         """Delegate to IAModel.compute_excess_series using current IA parameters."""
         return IAModel.compute_excess_series(
-            rainfall_mm=df["rainfall_mm"].to_numpy(dtype=float),
+            rainfall_mm=df[self._rainfall_col].to_numpy(dtype=float),
             dt_hours=np.full(len(df), self._dt_hours),
             temperature=df["temperature_c"].to_numpy(dtype=float),
             ia_max=self.get_scalar_parameter("ia_max").value,
