@@ -566,21 +566,28 @@ try:
         exogenous = exogenous or {}
 
         # ── Build subplot grid ───────────────────────────────────────────
+        # Col 1 (65 %): Row 1 = Exogenous, Row 2 = Time series
+        # Col 2 (35 %): Rows 1-2 = 1:1 Scatter (rowspan=2)
+        #
+        # Plotly axis numbering (reading order, skipping None):
+        #   (1,1) → xaxis,  yaxis   — Exogenous
+        #   (1,2) → xaxis2, yaxis2  — Scatter (rowspan=2)
+        #   (2,1) → xaxis3, yaxis3  — Time series
         fig = make_subplots(
             rows=2, cols=2,
             column_widths=[0.65, 0.35],
             row_heights=[0.35, 0.65],
             specs=[
-                [{"colspan": 2}, None],
-                [{},             {}],
+                [{},  {"rowspan": 2}],
+                [{},  None          ],
             ],
             shared_xaxes=False,
             vertical_spacing=0.08,
             horizontal_spacing=0.08,
-            subplot_titles=["Exogenous Inputs", "Predicted vs Observed", "1:1 Scatter"],
+            subplot_titles=["Exogenous Inputs", "1:1 Scatter", "Predicted vs Observed"],
         )
 
-        # ── Row 1: exogenous traces ──────────────────────────────────────
+        # ── Row 1, Col 1: exogenous traces ──────────────────────────────
         # All inputs are normalized to [0, 1] and share a single y-axis.
         # The legend label carries the original min–max range and units.
         for label, (values, units) in exogenous.items():
@@ -616,7 +623,7 @@ try:
 
         fig.update_yaxes(title_text="Normalized [0–1]", range=[0, 1], row=1, col=1)
 
-        # ── Row 2 Left: predicted vs observed time series ────────────────
+        # ── Row 2, Col 1: predicted vs observed time series ─────────────
         if pareto_predictions is not None:
             pp = np.asarray(pareto_predictions, dtype=float)
             lo = np.percentile(pp, confidence_percentiles[0], axis=0)
@@ -645,7 +652,7 @@ try:
             row=2, col=1,
         )
 
-        # ── Row 2 Right: 1v1 scatter ─────────────────────────────────────
+        # ── Rows 1-2, Col 2: 1v1 scatter ────────────────────────────────
         max_val = float(np.nanmax([observed, predicted]))
 
         # Pareto box-whiskers
@@ -662,7 +669,7 @@ try:
                         showlegend=False,
                         boxpoints=False,
                     ),
-                    row=2, col=2,
+                    row=1, col=2,
                 )
 
         # Best solution markers
@@ -673,7 +680,7 @@ try:
                 name="Best solution",
                 marker=dict(color="#1f77b4", size=5, opacity=0.7),
             ),
-            row=2, col=2,
+            row=1, col=2,
         )
 
         # 45° perfect-fit line
@@ -684,7 +691,7 @@ try:
                 name="Perfect fit (45°)",
                 line=dict(color="black", dash="dash", width=1.5),
             ),
-            row=2, col=2,
+            row=1, col=2,
         )
 
         # Tolerance angle lines
@@ -702,20 +709,23 @@ try:
                         name=f"45°{label_suffix}{theta}°",
                         line=dict(color=color, dash="dot", width=1),
                     ),
-                    row=2, col=2,
+                    row=1, col=2,
                 )
 
-        # ── Link x-axes of row-1 and row-2-left ──────────────────────────
+        # ── Synchronize time axes; rangeslider on the bottom time panel ──
+        # xaxis  (row 1, col 1) = Exogenous  → follows xaxis3
+        # xaxis3 (row 2, col 1) = Time series → carries the rangeslider
+        # xaxis2 (row 1, col 2) = Scatter     → independent (static)
         fig.update_layout(
             title_text=title,
-            xaxis2=dict(matches="x"),
             barmode="overlay",
             legend=dict(groupclick="toggleitem"),
-            height=700,
+            height=750,
+            xaxis=dict(matches="x3"),
+            xaxis3=dict(rangeslider=dict(visible=True, thickness=0.05)),
         )
-        fig.update_yaxes(title_text="", row=2, col=2)
-        fig.update_xaxes(title_text="Observed", row=2, col=2)
-        fig.update_yaxes(title_text="Predicted", row=2, col=2)
+        fig.update_xaxes(title_text="Observed",  row=1, col=2)
+        fig.update_yaxes(title_text="Predicted", row=1, col=2)
 
         return fig
 

@@ -95,12 +95,14 @@ try:
             n_evaluations: int = 10_000,
             seed: int | None = 42,
             record_frequency: int = 1,
+            callback=None,
             **algorithm_kwargs,
         ) -> None:
             self.algorithm_class = algorithm_class
             self.n_evaluations = n_evaluations
             self.seed = seed
             self.record_frequency = record_frequency
+            self.callback = callback
             self.algorithm_kwargs = algorithm_kwargs
 
         def solve(self, problem: "CalibrationProblem", **kwargs) -> CalibrationResult:
@@ -108,7 +110,7 @@ try:
 
             :param problem: Calibration problem wrapping model + data + objectives.
             :param kwargs: Per-call overrides: ``n_evaluations``, ``seed``,
-                ``record_frequency``.  Additional keys are merged into
+                ``record_frequency``, ``callback``.  Additional keys are merged into
                 ``algorithm_kwargs`` and forwarded to the algorithm constructor.
             :returns: Result with per-iteration history and final Pareto front.
             :rtype: CalibrationResult
@@ -116,6 +118,7 @@ try:
             n_evaluations    = kwargs.pop("n_evaluations",    self.n_evaluations)
             seed             = kwargs.pop("seed",             self.seed)
             record_frequency = kwargs.pop("record_frequency", self.record_frequency)
+            user_callback    = kwargs.pop("callback",         self.callback)
             algorithm_kwargs = {**self.algorithm_kwargs, **kwargs}
 
             if seed is not None:
@@ -163,14 +166,24 @@ try:
                             [list(sol.objectives) for sol in current], dtype=float
                         )
                         pareto_mask = _identify_pareto(F)
+                        n_pareto = int(np.sum(pareto_mask))
                         history.append(
                             GenerationRecord(
                                 generation=iteration,
                                 X=X,
                                 F=F,
-                                n_pareto=int(np.sum(pareto_mask)),
+                                n_pareto=n_pareto,
                             )
                         )
+                        if user_callback is not None:
+                            user_callback({
+                                "generation": iteration,
+                                "n_evals": int(algorithm.nfe),
+                                "n_pareto": n_pareto,
+                                "pareto_F": F[pareto_mask],
+                                "objective_names": problem.objective_names,
+                                "minimize_flags": problem.minimize_flags,
+                            })
 
             # Final Pareto front --------------------------------------------------
             final = algorithm.result
@@ -218,6 +231,7 @@ try:
             epsilons: list | None = None,
             seed: int | None = 42,
             record_frequency: int = 1,
+            callback=None,
             **algorithm_kwargs,
         ) -> None:
             self.swarm_size = swarm_size
@@ -226,6 +240,7 @@ try:
             self.epsilons = epsilons
             self.seed = seed
             self.record_frequency = record_frequency
+            self.callback = callback
             self.algorithm_kwargs = algorithm_kwargs
 
         def solve(self, problem: "CalibrationProblem", **kwargs) -> "CalibrationResult":
@@ -233,7 +248,8 @@ try:
 
             :param problem: Calibration problem wrapping model + data + objectives.
             :param kwargs: Per-call overrides: ``swarm_size``, ``leader_size``,
-                ``n_evaluations``, ``seed``, ``record_frequency``, ``epsilons``.
+                ``n_evaluations``, ``seed``, ``record_frequency``, ``epsilons``,
+                ``callback``.
             """
             swarm_size       = kwargs.pop("swarm_size",       self.swarm_size)
             leader_size      = kwargs.pop("leader_size",      self.leader_size)
@@ -241,6 +257,7 @@ try:
             epsilons         = kwargs.pop("epsilons",         self.epsilons)
             seed             = kwargs.pop("seed",             self.seed)
             record_frequency = kwargs.pop("record_frequency", self.record_frequency)
+            callback         = kwargs.pop("callback",         self.callback)
 
             if epsilons is not None and len(epsilons) != problem.n_objectives:
                 raise ValueError(
@@ -258,6 +275,7 @@ try:
                 n_evaluations=n_evaluations,
                 seed=seed,
                 record_frequency=record_frequency,
+                callback=callback,
                 **extra,
                 **{**self.algorithm_kwargs, **kwargs},
             ).solve(problem)
