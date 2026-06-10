@@ -194,95 +194,78 @@ class TestIAModel(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# TestIAModelVolumeDepletion
+# TestIAModelDesignDepletion
 # ---------------------------------------------------------------------------
 
-class TestIAModelVolumeDepletion(unittest.TestCase):
-    """Mass-conserving ("volume") depletion mode: the bucket is drained by
-    exactly the water it absorbs, giving antecedent-condition sensitivity."""
+class TestIAModelDesignDepletion(unittest.TestCase):
+    """Design contract: IA_consumed = ia_avail * (1 - exp(-k_dep * P)) is
+    abstracted from the rainfall AND drained from the storage (mass-conserving),
+    so antecedent wetness directly controls the response."""
 
-    def test_invalid_depletion_raises(self):
-        with self.assertRaises(ValueError):
-            IAModel(depletion="bogus")
-
-    def test_invalid_depletion_raises_in_series(self):
-        with self.assertRaises(ValueError):
-            IAModel.compute_excess_series(
-                rainfall_mm=np.zeros(3), dt_hours=np.ones(3), temperature=None,
-                ia_max=5.0, k0=0.05, kT=0.0, theta=0.0,
-                T_ref=20.0, k_dep=0.3, T_freeze=0.0, depletion="bogus",
-            )
-
-    def test_step_wet_drains_by_absorbed_volume(self):
-        m = IAModel(ia_max=10.0, depletion="volume")
+    def test_mass_conservation(self):
+        """Capacity drained equals the water abstracted from the rainfall."""
+        m = IAModel(ia_max=10.0, k_dep=0.1)
         m.ia_avail = 10.0
-        m.step_wet(delta_precip_mm=3.0)
-        self.assertAlmostEqual(m.ia_avail, 7.0)
+        P = 5.0
+        excess = m.compute_excess(rainfall_mm=P)
+        consumed = 10.0 * (1.0 - math.exp(-0.1 * P))
+        self.assertAlmostEqual(excess, P - consumed)
+        self.assertAlmostEqual(10.0 - m.ia_avail, consumed)
+        self.assertAlmostEqual(10.0 - m.ia_avail, P - excess)
 
-    def test_step_wet_floors_at_zero(self):
-        m = IAModel(ia_max=10.0, depletion="volume")
+    def test_k_dep_zero_means_no_abstraction(self):
+        """k_dep = 0 → IA_consumed = 0 → excess = P (no degenerate threshold)."""
+        rain = np.array([0.0, 2.0, 5.0])
+        result = IAModel.compute_excess_series(
+            rainfall_mm=rain, dt_hours=np.ones(3), temperature=None,
+            ia_max=10.0, k0=0.05, kT=0.0, theta=0.0,
+            T_ref=20.0, k_dep=0.0, T_freeze=0.0,
+        )
+        np.testing.assert_allclose(result, rain)
+
+    def test_large_k_dep_approaches_threshold(self):
+        """k_dep → ∞ → IA_consumed → ia_avail → excess → max(0, P - ia_avail)."""
+        m = IAModel(ia_max=2.0, k_dep=1e6)
         m.ia_avail = 2.0
-        m.step_wet(delta_precip_mm=5.0)
-        self.assertAlmostEqual(m.ia_avail, 0.0)
+        excess = m.compute_excess(rainfall_mm=5.0)
+        self.assertAlmostEqual(excess, 3.0, places=6)
+        self.assertAlmostEqual(m.ia_avail, 0.0, places=6)
 
-    def test_full_bucket_absorbs_storm_below_capacity(self):
-        """After a dry spell (full bucket), a storm P < ia_avail yields zero
-        excess and the bucket drops by exactly P (mass conservation)."""
-        rain = np.array([0.0, 0.0, 0.0, 1.5, 0.0])
-        result = IAModel.compute_excess_series(
-            rainfall_mm=rain, dt_hours=np.ones(5), temperature=None,
-            ia_max=2.0, k0=0.0, kT=0.0, theta=0.0,
-            T_ref=20.0, k_dep=0.3, T_freeze=0.0, depletion="volume",
-        )
-        np.testing.assert_allclose(result, 0.0)
+    def test_antecedent_contrast_same_storm(self):
+        """A full bucket abstracts more from the same storm than a drained one."""
+        full = IAModel(ia_max=2.0, k_dep=1.0)
+        full.ia_avail = 2.0
+        low = IAModel(ia_max=2.0, k_dep=1.0)
+        low.ia_avail = 0.2
+        self.assertLess(full.compute_excess(1.5), low.compute_excess(1.5))
 
-    def test_consecutive_storms_deplete_then_run_off(self):
-        """Storm 1 partially absorbed; storm 2 finds an empty bucket → excess = P."""
-        rain = np.array([1.5, 1.5])
+    def test_dry_spell_then_back_to_back_storms(self):
+        """After 30 dry days the first storm is mostly absorbed; the second,
+        on the drained bucket, mostly runs off."""
+        rain = np.zeros(32)
+        rain[30] = 1.5
+        rain[31] = 1.5
         result = IAModel.compute_excess_series(
-            rainfall_mm=rain, dt_hours=np.ones(2), temperature=None,
-            ia_max=2.0, k0=0.0, kT=0.0, theta=0.0,
-            T_ref=20.0, k_dep=0.3, T_freeze=0.0, depletion="volume",
+            rainfall_mm=rain, dt_hours=np.full(32, 24.0), temperature=None,
+            ia_max=2.0, k0=0.05, kT=0.0, theta=0.0,
+            T_ref=20.0, k_dep=1.0, T_freeze=0.0,
         )
-        # Day 1: bucket 2.0 → excess 0, bucket 0.5.  Day 2: excess 1.5-0.5=1.0.
-        self.assertAlmostEqual(result[0], 0.0)
-        self.assertAlmostEqual(result[1], 1.0)
+        # Day 30: consumed = 2*(1-e^-1.5) = 1.554 > 1.5 → excess 0
+        # Day 31: bucket ~0.446 → consumed 0.347 → excess ~1.153
+        self.assertAlmostEqual(result[30], 0.0)
+        self.assertGreater(result[31], 1.0)
 
     def test_recovery_refills_between_storms(self):
-        """Dry-interval recovery refills the bucket, restoring absorption."""
-        rain = np.array([3.0, 0.0, 0.0, 0.0, 1.0])
+        """Dry-interval recovery restores absorption for the next storm."""
+        rain = np.array([5.0, 0.0, 0.0, 0.0, 1.0])
         kwargs = dict(
             rainfall_mm=rain, dt_hours=np.full(5, 24.0), temperature=None,
             ia_max=2.0, kT=0.0, theta=0.0,
-            T_ref=20.0, k_dep=0.3, T_freeze=0.0, depletion="volume",
+            T_ref=20.0, k_dep=2.0, T_freeze=0.0,
         )
-        # Fast recovery: bucket refilled before day-5 storm → zero excess
         fast = IAModel.compute_excess_series(k0=1.0, **kwargs)
-        self.assertAlmostEqual(fast[4], 0.0)
-        # No recovery: bucket still empty on day 5 → full excess
-        none = IAModel.compute_excess_series(k0=0.0, **kwargs)
-        self.assertAlmostEqual(none[4], 1.0)
-
-    def test_default_mode_unchanged(self):
-        """IAModel() without a depletion arg reproduces exponential behaviour."""
-        rain = np.array([0.0, 5.0, 10.0, 5.0, 0.0])
-        kwargs = dict(
-            rainfall_mm=rain, dt_hours=np.ones(5),
-            temperature=np.full(5, 20.0),
-            ia_max=5.0, k0=0.05, kT=0.02, theta=0.1,
-            T_ref=20.0, k_dep=0.3, T_freeze=0.0,
-        )
-        default = IAModel.compute_excess_series(**kwargs)
-        explicit = IAModel.compute_excess_series(depletion="exponential", **kwargs)
-        np.testing.assert_allclose(default, explicit)
-
-    def test_volume_mode_disables_k_dep_calibration(self):
-        m = IAModel(depletion="volume")
-        m.initialize()
-        self.assertFalse(m.get_scalar_parameter("ia_k_dep").calibrate)
-        m2 = IAModel()
-        m2.initialize()
-        self.assertTrue(m2.get_scalar_parameter("ia_k_dep").calibrate)
+        slow = IAModel.compute_excess_series(k0=0.0001, **kwargs)
+        self.assertLess(fast[4], slow[4])
 
 
 # ---------------------------------------------------------------------------

@@ -319,20 +319,19 @@ class RDIIModel(IModel):
     def inequality_constraints(self) -> list[float]:
         """Inequality constraint residuals for the optimizer.
 
-        Returns ``[Σ R_i - 1.0, ia_T_freeze - ia_T_ref]``.
+        Returns ``[Σ R_i - 1.0]``.
         A value ≤ 0 means feasible.  Solvers enforce these natively (pymoo)
         or via squared penalty (Platypus / SciPy).
+        The ``ia_T_freeze < ia_T_ref`` constraint is enforced by :meth:`validate`.
 
-        :returns: List of two residuals.
+        :returns: List of one residual.
         :rtype: list[float]
         """
         R_sum = sum(
             self.get_scalar_parameter(f"R_{i}").value
             for i in range(1, self.n_triangles + 1)
         )
-        T_freeze = self.get_scalar_parameter("ia_T_freeze").value
-        T_ref    = self.get_scalar_parameter("ia_T_ref").value
-        return [R_sum - 1.0, T_freeze - T_ref]
+        return [R_sum - 1.0]
 
     # ------------------------------------------------------------------
     # Private helpers

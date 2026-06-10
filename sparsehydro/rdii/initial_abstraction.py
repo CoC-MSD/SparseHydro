@@ -16,21 +16,21 @@ Recovery (dry interval Δt, temperature T):
 
     IA_avail(t+Δt) = IA_max - (IA_max - IA_avail(t)) * exp(-k_rec(T) * Δt)
 
-Depletion (rainfall pulse ΔP mm) — two modes:
+Depletion and rainfall excess (rainfall pulse ΔP mm):
 
-    "exponential" (default):  IA_avail(t+Δt) = IA_avail(t) * exp(-k_dep * ΔP)
+    IA_consumed = IA_avail(t) * (1 - exp(-k_dep * ΔP))
 
-    "volume" (mass-conserving):  IA_avail(t+Δt) = max(0, IA_avail(t) - ΔP)
+    P_excess = max(0, ΔP - IA_consumed)
 
-In volume mode the storage is drained by exactly the water it absorbs
-(SWMM/SCS-style IA bucket), so antecedent wetness directly controls how much
-of a storm is abstracted: a full bucket after a dry spell absorbs up to
-``ia_max``, while back-to-back storms find the bucket empty and run off.
-``k_dep`` is unused in volume mode and is registered with ``calibrate=False``.
+    IA_avail(t+Δt) = IA_avail(t) - IA_consumed   [= IA_avail(t) * exp(-k_dep * ΔP)]
 
-Rainfall excess:
-
-    P_excess = max(0, ΔP - IA_avail(t))   [then update IA_avail]
+The storage is drained by exactly the water it abstracts from the rainfall
+(mass-conserving), so antecedent wetness directly controls the response: a
+full bucket after a dry spell consumes most of a storm, while back-to-back
+storms find the bucket drained and run off.  ``k_dep`` controls how
+aggressively the remaining capacity is applied to a given storm
+(rule of thumb: k_dep ≈ 1 / IA_max; k_dep → 0 disables abstraction,
+k_dep → ∞ approaches threshold absorption of the full remaining capacity).
 """
 
 from __future__ import annotations
@@ -61,13 +61,8 @@ class IAModel(IModel):
     :param T_ref: Reference temperature [°C].
     :param k_dep: Depletion rate constant.  Defaults to 7.62 /in (imperial)
         or 0.3 /mm (metric).  Pass ``None`` to use the unit-appropriate default.
-        Unused when ``depletion="volume"``.
     :param T_freeze: Temperature below which recovery is suppressed [°C].
     :param units: Unit system — ``"imperial"`` (default, inches) or ``"metric"`` (mm).
-    :param depletion: Wet-step depletion mode — ``"exponential"`` (default,
-        ``IA_avail *= exp(-k_dep * ΔP)``) or ``"volume"`` (mass-conserving,
-        ``IA_avail = max(0, IA_avail - ΔP)``; the bucket is drained by exactly
-        the water it absorbs, giving strong antecedent-condition sensitivity).
     """
 
     model_name = "initial-abstraction"
@@ -82,17 +77,11 @@ class IAModel(IModel):
         k_dep: float | None = None,
         T_freeze: float = 0.0,
         units: str = "imperial",
-        depletion: str = "exponential",
     ) -> None:
         super().__init__()
         if units not in ("imperial", "metric"):
             raise ValueError(f"units must be 'imperial' or 'metric'; got {units!r}")
-        if depletion not in ("exponential", "volume"):
-            raise ValueError(
-                f"depletion must be 'exponential' or 'volume'; got {depletion!r}"
-            )
         self._units = units
-        self._depletion = depletion
         self._rainfall_col = "rainfall_in" if units == "imperial" else "rainfall_mm"
         self._excess_col = "p_excess_in" if units == "imperial" else "p_excess_mm"
 
@@ -149,7 +138,6 @@ class IAModel(IModel):
         self.register_scalar_parameter(ScalarParameter(
             "ia_k_dep", value=self.k_dep, lower_bound=ia_kdep_lb, upper_bound=ia_kdep_ub,
             units=ia_kdep_units, description=ia_kdep_desc,
-            calibrate=(self._depletion == "exponential"),
         ))
         self.register_scalar_parameter(ScalarParameter(
             "ia_T_freeze", value=self.T_freeze, lower_bound=-5.0, upper_bound=5.0,
@@ -233,7 +221,6 @@ class IAModel(IModel):
             T_ref=self.T_ref,
             k_dep=self.k_dep,
             T_freeze=self.T_freeze,
-            depletion=self._depletion,
         )
 
         result = pd.DataFrame({
@@ -281,9 +268,9 @@ class IAModel(IModel):
     def step_wet(self, delta_precip_mm: float) -> float:
         """Deplete ``ia_avail`` for a rainfall pulse of ``delta_precip_mm`` mm.
 
-        In ``"volume"`` mode the storage is drained by the absorbed volume
-        (``IA_avail = max(0, IA_avail - ΔP)``); in ``"exponential"`` mode it
-        decays as ``IA_avail *= exp(-k_dep * ΔP)``.
+        Drains the storage by the consumed volume
+        ``IA_consumed = IA_avail * (1 - exp(-k_dep * ΔP))``, i.e.
+        ``IA_avail *= exp(-k_dep * ΔP)``.
 
         :param delta_precip_mm: Rainfall depth [mm], must be ≥ 0.
         :returns: Updated ``ia_avail`` [mm].
@@ -291,27 +278,27 @@ class IAModel(IModel):
         """
         if delta_precip_mm <= 0.0:
             return self.ia_avail
-        if self._depletion == "volume":
-            self.ia_avail = self.ia_avail - delta_precip_mm
-        else:
-            self.ia_avail = self.ia_avail * math.exp(-self.k_dep * delta_precip_mm)
+        self.ia_avail = self.ia_avail * math.exp(-self.k_dep * delta_precip_mm)
         self.ia_avail = max(0.0, min(self.ia_max, self.ia_avail))
         return self.ia_avail
 
     def compute_excess(self, rainfall_mm: float) -> float:
         """Return rainfall excess and deplete ``ia_avail`` accordingly.
 
-        Excess = max(0, rainfall_mm - ia_avail).  The available capacity is
-        then depleted by the rainfall amount (not just the satisfied portion)
-        using the exponential depletion formula.
+        ``IA_consumed = IA_avail * (1 - exp(-k_dep * rainfall))`` is abstracted
+        from the rainfall, then ``Excess = max(0, rainfall - IA_consumed)``.
+        The storage is drained by exactly ``IA_consumed`` (mass-conserving),
+        which :meth:`step_wet` performs via the equivalent exponential decay.
 
         :param rainfall_mm: Rainfall depth for this time step [mm].
         :returns: Rainfall excess [mm].
         :rtype: float
         """
-        excess = max(0.0, rainfall_mm - self.ia_avail)
-        if rainfall_mm > 0.0:
-            self.step_wet(rainfall_mm)
+        if rainfall_mm <= 0.0:
+            return 0.0
+        ia_consumed = self.ia_avail * (1.0 - math.exp(-self.k_dep * rainfall_mm))
+        excess = max(0.0, rainfall_mm - ia_consumed)
+        self.step_wet(rainfall_mm)
         return excess
 
     def reset(self) -> None:
@@ -334,7 +321,6 @@ class IAModel(IModel):
         T_ref: float,
         k_dep: float,
         T_freeze: float,
-        depletion: str = "exponential",
     ) -> np.ndarray:
         """Compute rainfall excess array for a full time series.
 
@@ -350,22 +336,15 @@ class IAModel(IModel):
         :param kT: Temperature-dependent recovery coefficient [1/hr].
         :param theta: Temperature sensitivity exponent [1/°C].
         :param T_ref: Reference temperature [°C].
-        :param k_dep: Depletion rate [1/mm].  Unused when ``depletion="volume"``.
+        :param k_dep: Depletion rate [1/mm].
         :param T_freeze: Freeze threshold [°C].
-        :param depletion: ``"exponential"`` (default) or ``"volume"``
-            (mass-conserving: storage drained by the absorbed volume).
         :returns: 1-D array of rainfall excess values [mm].
         :rtype: numpy.ndarray
         """
-        if depletion not in ("exponential", "volume"):
-            raise ValueError(
-                f"depletion must be 'exponential' or 'volume'; got {depletion!r}"
-            )
         n = len(rainfall_mm)
         excess = np.zeros(n, dtype=float)
         ia_avail = float(ia_max)
 
-        volume_mode = depletion == "volume"
         use_temp = temperature is not None
 
         for i in range(n):
@@ -382,12 +361,11 @@ class IAModel(IModel):
                 deficit = ia_max - ia_avail
                 ia_avail = ia_max - deficit * math.exp(-k_rec * dt)
             else:
-                # Wet step: compute excess then deplete
-                excess[i] = max(0.0, P - ia_avail)
-                if volume_mode:
-                    ia_avail = ia_avail - P
-                else:
-                    ia_avail = ia_avail * math.exp(-k_dep * P)
+                # Wet step: abstract IA_consumed from the rainfall, then drain
+                # the storage by exactly that volume (mass-conserving).
+                ia_consumed = ia_avail * (1.0 - math.exp(-k_dep * P))
+                excess[i] = max(0.0, P - ia_consumed)
+                ia_avail = ia_avail - ia_consumed
 
             ia_avail = max(0.0, min(ia_max, ia_avail))
 
