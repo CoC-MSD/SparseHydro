@@ -34,7 +34,7 @@ import pandas as pd
 
 from ..enums import ModelState
 from ..interfaces import IModel, IUnitHydroComponent
-from ..parameters import ScalarParameter
+from ..parameters import ConstraintRecord, ScalarParameter
 from ..registry import registry
 from .initial_abstraction import IAModel
 from .rtk_triangle import RTKTriangle
@@ -187,14 +187,30 @@ class CombinedHydroModel(IModel):
                 mapping[name] = composite_name
             self._uh_param_maps.append(mapping)
 
+        # --- Inequality constraint metadata ---
+        self.register_inequality_constraint(ConstraintRecord(
+            name="sum_R_leq_1",
+            description=(
+                f"R_1 + … + R_{len(self._uh_components)} ≤ 1.0  "
+                "(total runoff fraction must not exceed 100 %)"
+            ),
+        ))
+        self.register_inequality_constraint(ConstraintRecord(
+            name="T_freeze_lt_T_ref",
+            description=(
+                "ia_T_freeze < ia_T_ref  "
+                "(freeze threshold must be below the reference temperature)"
+            ),
+        ))
+
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:
         """Validate all parameters and physical constraints.
 
         Checks ``ia_T_freeze < ia_T_ref`` when both are present.
-        The ``Σ R_i <= 1.0`` constraint is reported via
-        :meth:`inequality_constraints` and enforced by the solver.
+        The ``Σ R_i <= 1.0`` and ``ia_T_freeze < ia_T_ref`` constraints are
+        also reported via :meth:`inequality_constraints` and enforced by the solver.
 
         :returns: ``True`` if all constraints are satisfied.
         :rtype: bool
@@ -329,16 +345,19 @@ class CombinedHydroModel(IModel):
     def inequality_constraints(self) -> list[float]:
         """Inequality constraint residuals for the optimizer.
 
-        Returns ``[Σ R_i - 1.0]``.  A value ≤ 0 means feasible.
+        Returns ``[Σ R_i - 1.0, ia_T_freeze - ia_T_ref]``.
+        A value ≤ 0 means feasible.
 
-        :returns: List with one residual: ``sum(R_i) - 1.0``.
+        :returns: List of two residuals.
         :rtype: list[float]
         """
         R_sum = sum(
             self.get_scalar_parameter(f"R_{i}").value
             for i in range(1, self.n_components + 1)
         )
-        return [R_sum - 1.0]
+        T_freeze = self.get_scalar_parameter("ia_T_freeze").value
+        T_ref    = self.get_scalar_parameter("ia_T_ref").value
+        return [R_sum - 1.0, T_freeze - T_ref]
 
     # ------------------------------------------------------------------
     # Private helpers

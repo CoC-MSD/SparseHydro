@@ -13,27 +13,35 @@ import numpy as np
 def peak_weighted_mse(
     observed: np.ndarray,
     predicted: np.ndarray,
+    power: float = 1.0,
 ) -> float:
     """Peak-weighted mean squared error.
 
     Weights each squared residual by the observed flow at that step relative
-    to the mean observed flow, so errors during high-flow (peak) events are
-    penalised more heavily than errors during low-flow periods.
+    to the mean observed flow, raised to ``power``, so errors during high-flow
+    (peak) events are penalised more heavily than errors during low-flow
+    periods.
 
     .. math::
 
-        w_t = Q_{obs,t} / \\bar{Q}_{obs}
+        w_t = (Q_{obs,t} / \\bar{Q}_{obs})^{p}
 
         PWMSE = \\frac{\\sum_t w_t (Q_{obs,t} - Q_{pred,t})^2}{\\sum_t w_t}
+
+    ``power=1.0`` (default) gives linear weighting; larger values sharpen the
+    focus on peaks (e.g. with ``power=2.0`` a flow at 4x the mean carries 16x
+    the weight instead of 4x).  ``power=0.0`` reduces to plain MSE.
 
     :param observed: 1-D array of observed flow values (non-negative).
     :type observed: numpy.ndarray
     :param predicted: 1-D array of predicted flow values (same length).
     :type predicted: numpy.ndarray
+    :param power: Exponent applied to the normalised-flow weights (>= 0).
+    :type power: float
     :returns: Peak-weighted MSE (lower is better, 0 for perfect prediction).
     :rtype: float
-    :raises ValueError: If arrays differ in shape, or if ``observed`` is
-        all-zero (undefined mean).
+    :raises ValueError: If arrays differ in shape, if ``observed`` is
+        all-zero (undefined mean), or if ``power`` is negative.
     """
     obs = np.asarray(observed, dtype=float)
     pred = np.asarray(predicted, dtype=float)
@@ -41,12 +49,14 @@ def peak_weighted_mse(
         raise ValueError(
             f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}"
         )
+    if power < 0.0:
+        raise ValueError(f"power must be >= 0; got {power!r}")
     mean_obs = float(np.mean(obs))
     if mean_obs == 0.0:
         raise ValueError(
             "observed is all zeros; peak-weighted MSE is undefined."
         )
-    weights = obs / mean_obs
+    weights = (obs / mean_obs) ** power
     w_sum = float(np.sum(weights))
     if w_sum == 0.0:
         return 0.0

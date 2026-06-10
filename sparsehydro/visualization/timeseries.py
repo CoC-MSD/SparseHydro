@@ -648,7 +648,7 @@ try:
         )
         fig.add_trace(
             go.Scatter(x=dt_series, y=predicted, mode="lines",
-                       name=predicted_label, line=dict(color="#1f77b4", dash="dash")),
+                       name=predicted_label, line=dict(color="#1f77b4")),
             row=2, col=1,
         )
 

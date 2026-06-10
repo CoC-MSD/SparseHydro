@@ -178,6 +178,13 @@ class RDIIModel(IModel):
                 f"(total sewer fraction of P_excess must not exceed 100 %)"
             ),
         ))
+        self.register_inequality_constraint(ConstraintRecord(
+            name="T_freeze_lt_T_ref",
+            description=(
+                "ia_T_freeze < ia_T_ref  "
+                "(freeze threshold must be below the reference temperature)"
+            ),
+        ))
 
         self._state = ModelState.INITIALIZED
 
@@ -312,18 +319,20 @@ class RDIIModel(IModel):
     def inequality_constraints(self) -> list[float]:
         """Inequality constraint residuals for the optimizer.
 
-        Returns ``[Σ R_i - 1.0]``.  A value ≤ 0 means feasible.
-        The solver (NSGA-II via pymoo) enforces this natively; other solvers
-        receive a squared penalty via :meth:`~sparsehydro.calibration.CalibrationProblem.evaluate`.
+        Returns ``[Σ R_i - 1.0, ia_T_freeze - ia_T_ref]``.
+        A value ≤ 0 means feasible.  Solvers enforce these natively (pymoo)
+        or via squared penalty (Platypus / SciPy).
 
-        :returns: List with one residual: ``sum(R_i) - 1.0``.
+        :returns: List of two residuals.
         :rtype: list[float]
         """
         R_sum = sum(
             self.get_scalar_parameter(f"R_{i}").value
             for i in range(1, self.n_triangles + 1)
         )
-        return [R_sum - 1.0]
+        T_freeze = self.get_scalar_parameter("ia_T_freeze").value
+        T_ref    = self.get_scalar_parameter("ia_T_ref").value
+        return [R_sum - 1.0, T_freeze - T_ref]
 
     # ------------------------------------------------------------------
     # Private helpers

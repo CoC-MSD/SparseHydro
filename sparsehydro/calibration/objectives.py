@@ -141,14 +141,19 @@ class PeakWeightedMSE(IObjective):
     """Peak-weighted mean squared error.
 
     Weights each squared residual by the observed flow at that step relative
-    to the mean observed flow, penalising errors during high-flow events.
+    to the mean observed flow, raised to ``power``, penalising errors during
+    high-flow events.
 
     .. math::
 
-        w_t = Q_{obs,t} / \\bar{Q}_{obs}
+        w_t = (Q_{obs,t} / \\bar{Q}_{obs})^{p}
 
         PWMSE = \\frac{\\sum_t w_t (Q_{obs,t} - Q_{pred,t})^2}{\\sum_t w_t}
 
+    ``power=1.0`` (default) gives linear weighting; larger values sharpen the
+    focus on peaks.  ``power=0.0`` reduces to plain MSE.
+
+    :param power: Exponent applied to the normalised-flow weights (>= 0).
     :cvar name: ``"peak_weighted_mse"``
     :cvar minimize: ``True``
     """
@@ -156,9 +161,14 @@ class PeakWeightedMSE(IObjective):
     name = "peak_weighted_mse"
     minimize = True
 
+    def __init__(self, power: float = 1.0) -> None:
+        if power < 0.0:
+            raise ValueError(f"power must be >= 0; got {power!r}")
+        self.power = float(power)
+
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
         from sparsehydro.rdii.objectives import peak_weighted_mse
-        return peak_weighted_mse(observed, predicted)
+        return peak_weighted_mse(observed, predicted, power=self.power)
 
 
 # ---------------------------------------------------------------------------
