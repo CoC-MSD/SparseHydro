@@ -136,10 +136,12 @@ class TestIAModel(unittest.TestCase):
             m.step_wet(100.0)
         self.assertGreaterEqual(m.ia_avail, 0.0)
 
-    def test_compute_excess_zero_below_capacity(self):
+    def test_compute_excess_zero_while_bucket_absorbs(self):
+        # With k_dep*ia > 1, no excess until p* = ln(k_dep*ia)/k_dep of rain
+        # has fallen (default imperial k_dep=7.62, ia=10 → p* ≈ 0.568)
         m = IAModel(ia_max=10.0)
         m.ia_avail = 10.0
-        excess = m.compute_excess(rainfall_mm=2.0)
+        excess = m.compute_excess(rainfall_mm=0.3)
         self.assertAlmostEqual(excess, 0.0)
 
     def test_compute_excess_positive_when_saturated(self):
@@ -203,7 +205,8 @@ class TestIAModelDesignDepletion(unittest.TestCase):
     so antecedent wetness directly controls the response."""
 
     def test_mass_conservation(self):
-        """Capacity drained equals the water abstracted from the rainfall."""
+        """Capacity drained equals the water abstracted from the rainfall
+        (k_dep*ia <= 1 regime, where clipping never binds)."""
         m = IAModel(ia_max=10.0, k_dep=0.1)
         m.ia_avail = 10.0
         P = 5.0
@@ -212,6 +215,34 @@ class TestIAModelDesignDepletion(unittest.TestCase):
         self.assertAlmostEqual(excess, P - consumed)
         self.assertAlmostEqual(10.0 - m.ia_avail, consumed)
         self.assertAlmostEqual(10.0 - m.ia_avail, P - excess)
+
+    def test_dt_invariance(self):
+        """One lumped step equals many uniform sub-steps (the closed form is
+        the exact limit of uniform disaggregation)."""
+        one = IAModel(ia_max=2.0, k_dep=2.0)
+        one.ia_avail = 2.0
+        excess_one = one.compute_excess(rainfall_mm=3.0)
+
+        many = IAModel(ia_max=2.0, k_dep=2.0)
+        many.ia_avail = 2.0
+        n = 2400
+        excess_many = sum(many.compute_excess(rainfall_mm=3.0 / n) for _ in range(n))
+
+        self.assertAlmostEqual(excess_one, excess_many, places=6)
+        self.assertAlmostEqual(one.ia_avail, many.ia_avail, places=6)
+
+    def test_closed_form_regime_values(self):
+        """Hand-computed regime checks."""
+        # Dry antecedent: ia0=2, k_dep=2, P=3 → excess ≈ 1.812 (was 1.005 lumped)
+        m = IAModel(ia_max=2.0, k_dep=2.0)
+        m.ia_avail = 2.0
+        self.assertAlmostEqual(m.compute_excess(3.0), 1.8116, places=3)
+        # Wet antecedent: ia0=0.3 (k_dep*ia <= 1) → unchanged from lumped form
+        m2 = IAModel(ia_max=2.0, k_dep=2.0)
+        m2.ia_avail = 0.3
+        self.assertAlmostEqual(
+            m2.compute_excess(3.0), 3.0 - 0.3 * (1 - math.exp(-6.0)), places=6,
+        )
 
     def test_k_dep_zero_means_no_abstraction(self):
         """k_dep = 0 → IA_consumed = 0 → excess = P (no degenerate threshold)."""
@@ -223,12 +254,14 @@ class TestIAModelDesignDepletion(unittest.TestCase):
         )
         np.testing.assert_allclose(result, rain)
 
-    def test_large_k_dep_approaches_threshold(self):
-        """k_dep → ∞ → IA_consumed → ia_avail → excess → max(0, P - ia_avail)."""
+    def test_large_k_dep_annihilates_capacity(self):
+        """k_dep → ∞: the bucket is destroyed within the first p* of rain with
+        negligible absorption → excess → P.  (Absorption is maximised at an
+        interior k_dep ≈ 1/ia_max, not at the extremes.)"""
         m = IAModel(ia_max=2.0, k_dep=1e6)
         m.ia_avail = 2.0
         excess = m.compute_excess(rainfall_mm=5.0)
-        self.assertAlmostEqual(excess, 3.0, places=6)
+        self.assertAlmostEqual(excess, 5.0, places=3)
         self.assertAlmostEqual(m.ia_avail, 0.0, places=6)
 
     def test_antecedent_contrast_same_storm(self):
@@ -250,10 +283,11 @@ class TestIAModelDesignDepletion(unittest.TestCase):
             ia_max=2.0, k0=0.05, kT=0.0, theta=0.0,
             T_ref=20.0, k_dep=1.0, T_freeze=0.0,
         )
-        # Day 30: consumed = 2*(1-e^-1.5) = 1.554 > 1.5 → excess 0
-        # Day 31: bucket ~0.446 → consumed 0.347 → excess ~1.153
-        self.assertAlmostEqual(result[30], 0.0)
+        # Day 30 (full bucket, closed form): p*=ln2 → excess ≈ 0.253
+        # Day 31 (bucket ~0.446): excess ≈ 1.153
+        self.assertLess(result[30], 0.4)
         self.assertGreater(result[31], 1.0)
+        self.assertLess(result[30], result[31])
 
     def test_recovery_refills_between_storms(self):
         """Dry-interval recovery restores absorption for the next storm."""
@@ -266,6 +300,80 @@ class TestIAModelDesignDepletion(unittest.TestCase):
         fast = IAModel.compute_excess_series(k0=1.0, **kwargs)
         slow = IAModel.compute_excess_series(k0=0.0001, **kwargs)
         self.assertLess(fast[4], slow[4])
+
+
+# ---------------------------------------------------------------------------
+# TestIAModelSnow
+# ---------------------------------------------------------------------------
+
+class TestIAModelSnow(unittest.TestCase):
+    """Degree-day snow model: precip on cold days is stored as SWE and
+    released as melt during warm spells, feeding the IA wet/dry logic."""
+
+    # k_dep=0 → excess equals the liquid input, isolating the snow logic
+    _ia_kwargs = dict(
+        ia_max=2.0, k0=0.0, kT=0.0, theta=0.0,
+        T_ref=20.0, k_dep=0.0, T_freeze=0.0,
+    )
+
+    def test_snowfall_accumulates_then_melts(self):
+        """Cold rainy days produce no response; a later warm DRY spell does."""
+        rain = np.array([1.0] * 5 + [0.0] * 5)
+        temp = np.array([-5.0] * 5 + [6.0] * 5)
+        result = IAModel.compute_excess_series(
+            rainfall_mm=rain, dt_hours=np.full(10, 24.0), temperature=temp,
+            snow_ddf=0.5, snow_T=1.0, **self._ia_kwargs,
+        )
+        np.testing.assert_allclose(result[:5], 0.0)   # snowed, no liquid
+        self.assertGreater(result[5], 0.0)            # melt with zero rain
+        self.assertAlmostEqual(result.sum(), 5.0)     # all SWE eventually melts
+
+    def test_melt_rate_and_swe_cap(self):
+        """melt = ddf*(T - snow_T)*dt_days, capped at remaining SWE."""
+        rain = np.array([1.0, 0.0, 0.0, 0.0])
+        temp = np.array([-5.0, 3.0, 3.0, 3.0])   # warm days: T - snow_T = 2
+        result = IAModel.compute_excess_series(
+            rainfall_mm=rain, dt_hours=np.full(4, 24.0), temperature=temp,
+            snow_ddf=0.25, snow_T=1.0, **self._ia_kwargs,
+        )
+        np.testing.assert_allclose(result, [0.0, 0.5, 0.5, 0.0], atol=1e-12)
+
+    def test_rain_on_snow_adds_melt(self):
+        """A warm rain day yields more excess when a snowpack is present."""
+        base = dict(dt_hours=np.full(2, 24.0), snow_ddf=0.5, snow_T=1.0,
+                    **self._ia_kwargs)
+        with_pack = IAModel.compute_excess_series(
+            rainfall_mm=np.array([2.0, 1.0]),
+            temperature=np.array([-5.0, 5.0]), **base,
+        )
+        without_pack = IAModel.compute_excess_series(
+            rainfall_mm=np.array([0.0, 1.0]),
+            temperature=np.array([-5.0, 5.0]), **base,
+        )
+        self.assertGreater(with_pack[1], without_pack[1])
+
+    def test_snow_disabled_is_identical(self):
+        """snow_T=None (default) reproduces the no-snow series exactly."""
+        rain = np.array([0.0, 5.0, 10.0, 5.0, 0.0])
+        kwargs = dict(
+            rainfall_mm=rain, dt_hours=np.ones(5),
+            temperature=np.full(5, -10.0),   # cold — would snow if enabled
+            ia_max=5.0, k0=0.05, kT=0.02, theta=0.1,
+            T_ref=20.0, k_dep=0.3, T_freeze=0.0,
+        )
+        default = IAModel.compute_excess_series(**kwargs)
+        explicit = IAModel.compute_excess_series(snow_ddf=0.5, snow_T=None, **kwargs)
+        np.testing.assert_allclose(default, explicit)
+
+    def test_snow_param_registration(self):
+        m = IAModel(snow=True)
+        m.initialize()
+        self.assertTrue(m.get_scalar_parameter("snow_T").calibrate)
+        self.assertTrue(m.get_scalar_parameter("snow_ddf").calibrate)
+        m2 = IAModel()
+        m2.initialize()
+        self.assertNotIn("snow_T", m2.scalar_parameter_names)
+        self.assertNotIn("snow_ddf", m2.scalar_parameter_names)
 
 
 # ---------------------------------------------------------------------------

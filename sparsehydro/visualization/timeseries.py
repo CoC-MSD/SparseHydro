@@ -152,6 +152,12 @@ try:
         pred = np.asarray(predicted, dtype=float)
         residuals = obs - pred
 
+        # Goodness-of-fit metrics for the 1v1 panel
+        r = float(np.corrcoef(obs, pred)[0, 1])
+        ss_res = float(np.sum((obs - pred) ** 2))
+        ss_tot = float(np.sum((obs - obs.mean()) ** 2))
+        nse = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
         max_lags = min(30, len(residuals) - 1)
         std = np.std(residuals)
         if std == 0:
@@ -202,6 +208,18 @@ try:
         )
         fig.update_xaxes(title_text=f"Observed {flow_label}", row=1, col=1)
         fig.update_yaxes(title_text=f"Predicted {flow_label}", row=1, col=1)
+        fig.add_annotation(
+            xref="x domain", yref="y domain",
+            x=0.05, y=0.95,
+            text=f"r = {r:.3f}<br>NSE = {nse:.3f}",
+            showarrow=False,
+            align="left",
+            bgcolor="rgba(255,255,255,0.7)",
+            bordercolor="grey",
+            borderwidth=1,
+            font=dict(size=12),
+            row=1, col=1,
+        )
 
         # Row 2 — residual bars
         fig.add_trace(
@@ -563,6 +581,12 @@ try:
         predicted = np.asarray(predicted, dtype=float)
         dt_series = pd.to_datetime(datetime)
 
+        # Goodness-of-fit metrics for the 1v1 panel
+        _r = float(np.corrcoef(observed, predicted)[0, 1])
+        _ss_res = float(np.sum((observed - predicted) ** 2))
+        _ss_tot = float(np.sum((observed - observed.mean()) ** 2))
+        _nse = 1.0 - _ss_res / _ss_tot if _ss_tot > 0 else float("nan")
+
         exogenous = exogenous or {}
 
         # ── Build subplot grid ───────────────────────────────────────────
@@ -726,6 +750,17 @@ try:
         )
         fig.update_xaxes(title_text="Observed",  row=1, col=2)
         fig.update_yaxes(title_text="Predicted", row=1, col=2)
+        fig.add_annotation(
+            xref="x2 domain", yref="y2 domain",
+            x=0.05, y=0.95,
+            text=f"r = {_r:.3f}<br>NSE = {_nse:.3f}",
+            showarrow=False,
+            align="left",
+            bgcolor="rgba(255,255,255,0.7)",
+            bordercolor="grey",
+            borderwidth=1,
+            font=dict(size=12),
+        )
 
         return fig
 
