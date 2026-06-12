@@ -78,6 +78,12 @@ def __init__(
 Defaults: `IAModel()` + 3 `RTKTriangle` instances (fast/medium/slow) — same
 starting point as `RDIIModel(n_triangles=3)`.
 
+Optional sub-model features flow through automatically: e.g.
+`CombinedHydroModel(ia_model=IAModel(units="imperial", snow=True))` registers
+the degree-day snow parameters (`snow_T`, `snow_ddf`) in the composite registry
+alongside the other IA params, making them calibratable with no composite-side
+changes (see `docs/rdii_design.md` for the snow model physics).
+
 ### Parameter layout in composite's flat registry
 
 | Name pattern        | Source                                      | Notes                        |

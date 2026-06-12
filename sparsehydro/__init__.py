@@ -8,7 +8,14 @@ from .unithydrograph import (
     UnitHydrographAdapter,
     create_uh_model,
     register_all_uh_models,
+    GammaUH,
+    NashUH,
+    TriangleUH,
+    SequentialFitter,
+    SequentialFitSummary,
 )
+from .filters import FilterResult, apply_savgol_filter, compute_thresholds
+from .events import EventRecord, detect_events, events_to_dataframe, load_events_from_csv
 
 __version__ = "0.1.0"
 __all__ = [
@@ -22,6 +29,18 @@ __all__ = [
     "UnitHydrographAdapter",
     "create_uh_model",
     "register_all_uh_models",
+    "GammaUH",
+    "NashUH",
+    "TriangleUH",
+    "SequentialFitter",
+    "SequentialFitSummary",
+    "FilterResult",
+    "apply_savgol_filter",
+    "compute_thresholds",
+    "EventRecord",
+    "detect_events",
+    "events_to_dataframe",
+    "load_events_from_csv",
     "ITorchModel",
     "__version__",
 ]
@@ -78,6 +97,12 @@ try:
         plot_rtk_shape,
         plot_rdii_components,
         plot_calibration_dashboard,
+        plot_rainfall_flow_with_events,
+        plot_filter_signals,
+        plot_event_detection,
+        plot_sequential_fit,
+        plot_parameter_evolution,
+        plot_effective_area,
     )
     __all__ += [
         "VisualizationModel",
@@ -96,6 +121,12 @@ try:
         "plot_rtk_shape",
         "plot_rdii_components",
         "plot_calibration_dashboard",
+        "plot_rainfall_flow_with_events",
+        "plot_filter_signals",
+        "plot_event_detection",
+        "plot_sequential_fit",
+        "plot_parameter_evolution",
+        "plot_effective_area",
     ]
 except ImportError:  # pragma: no cover
     pass

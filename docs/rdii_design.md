@@ -47,15 +47,58 @@ $$k_{rec}(T) = \begin{cases}
 - `k_T · exp(θ(T − T_ref))` — thermally-driven evapotranspiration.
 - Recovery is suppressed below `T_freeze`, producing high winter RDII naturally.
 
-### Initial Abstraction Depletion (storm pulse)
+### Initial Abstraction Depletion and Rainfall Excess (storm pulse)
 
-During rainfall, capacity is depleted exponentially per mm of rainfall:
+The wet step integrates the depletion ODE exactly over the step, assuming the
+step's rainfall $\Delta P$ falls uniformly in time (p = cumulative rain within
+the step):
+
+$$\frac{d\,IA_{avail}}{dp} = -k_{dep}\,IA_{avail}
+\quad\Rightarrow\quad
+IA_{avail}(p) = IA_{avail}(t)\,e^{-k_{dep}\,p}$$
+
+The instantaneous excess rate is $\max\bigl(0,\; 1 - k_{dep}\,IA_{avail}(p)\bigr)$,
+which integrates to the closed form (`_wet_step_excess()`):
+
+- $k_{dep}\,IA_{avail} \leq 1$ (bucket never absorbs the full rain rate):
+
+$$P_{excess} = \Delta P - IA_{avail}\,\bigl(1 - e^{-k_{dep}\,\Delta P}\bigr)$$
+
+- $k_{dep}\,IA_{avail} > 1$: no excess until $p^* = \ln(k_{dep}\,IA_{avail})/k_{dep}$
+  of rain has been absorbed, then
+
+$$P_{excess} = (\Delta P - p^*) - \Bigl(\tfrac{1}{k_{dep}} - IA_{avail}\,e^{-k_{dep}\,\Delta P}\Bigr)$$
+
+End-of-step state in both regimes:
 
 $$IA_{avail}(t+\Delta t) = IA_{avail}(t) \cdot e^{-k_{dep}\,\Delta P}$$
 
-Rainfall excess passed to the RTK triangles:
+Because the step is integrated exactly, results are **invariant to sub-step
+refinement** — running at a daily step is equivalent to uniformly
+disaggregating each day to an arbitrarily fine timestep. The storage is
+drained by the water it abstracts (mass-conserving), so antecedent wetness
+directly controls the storm response. Note that total absorption is maximised
+at an interior $k_{dep} \approx 1/IA_{max}$: $k_{dep} \to 0$ disables
+abstraction entirely, while $k_{dep} \to \infty$ destroys the capacity within
+the first instants of rain with negligible uptake.
 
-$$P_{excess}(t) = \max\bigl(0,\; P(t) - IA_{avail}(t)\bigr)$$
+### Degree-Day Snow Model (optional, `IAModel(snow=True)`)
+
+Precipitation on cold days is stored as snow-water equivalent (SWE) and
+released as melt during warm spells, feeding the IA wet/dry logic as liquid
+input:
+
+$$T \leq T_{snow}:\quad SWE \mathrel{+}= \Delta P,\qquad P_{liquid} = 0$$
+
+$$T > T_{snow}:\quad melt = \min\bigl(SWE,\; ddf\,(T - T_{snow})\,\Delta t_{days}\bigr),
+\qquad P_{liquid} = \Delta P + melt$$
+
+A single threshold `snow_T` serves as both the rain/snow partition and the
+melt base (no inter-parameter constraint needed). Rain-on-snow events add
+melt to the day's rainfall. `snow_ddf = 0` disables melt, so the optimizer can
+switch the snow influence off if the data does not support it. This produces
+melt-driven flow on days with little or no rain — the signature of cold-season
+wet-antecedent peak events.
 
 ### Triangular RTK Unit Hydrograph
 
@@ -85,8 +128,22 @@ The convolution uses `numpy.convolve` for short series and
 | `ia_kT`       | 0.02    | [0.0, 0.5]    | 1/hr  | Temperature-sensitive recovery coeff.   |
 | `ia_theta`    | 0.1     | [0.0, 0.5]    | 1/°C  | Temperature sensitivity exponent         |
 | `ia_T_ref`    | 20.0    | [0.0, 30.0]   | °C    | Reference temperature for ET scaling     |
-| `ia_k_dep`    | 0.3     | [0.01, 5.0]   | 1/mm  | Depletion rate per mm of rainfall        |
+| `ia_k_dep`    | 0.3     | [0.01, 5.0]   | 1/mm  | Depletion rate per mm of rainfall (rule of thumb ≈ 1/IA_max) |
 | `ia_T_freeze` | 0.0     | [-5.0, 5.0]   | °C    | Recovery suppressed below this temp.    |
+
+Defaults and bounds above are metric; imperial units (inches) use
+`ia_max` default 0.2 in [0.004, 2.0] and `ia_k_dep` default 7.62 /in [0.25, 127].
+
+### Snow — 2 additional parameters when `IAModel(snow=True)`
+
+| Name       | Default | Bounds       | Units        | Description                                |
+|------------|---------|--------------|--------------|--------------------------------------------|
+| `snow_T`   | 1.0     | [-2.0, 4.0]  | °C           | Rain/snow partition threshold & melt base  |
+| `snow_ddf` | 3.0     | [0.0, 12.0]  | mm/(°C·day)  | Degree-day snowmelt factor                 |
+
+(Imperial: `snow_ddf` default 0.12 in/(°C·day), bounds [0.0, 0.5].)
+With `snow=False` (default) neither parameter is registered — fully backward
+compatible.
 
 ### RTK Triangle — 3 parameters per triangle i (1..N)
 
@@ -139,14 +196,26 @@ Calibration uses the generic `CalibrationProblem` + `ISolver` framework in
 
 ### Objectives
 
-1. **Peak-weighted MSE** (minimize):
+1. **Peak-weighted MSE** (minimize) — `PeakWeightedMSE(power=1.0)`:
 
 $$PWMSE = \frac{\sum_t w_t\,(Q_{obs,t} - Q_{pred,t})^2}{\sum_t w_t},
-\quad w_t = \frac{Q_{obs,t}}{\overline{Q}_{obs}}$$
+\quad w_t = \left(\frac{Q_{obs,t}}{\overline{Q}_{obs}}\right)^{p}$$
+
+`power=1` (default) gives linear weighting; larger values sharpen the focus on
+peaks (with `power=2` a flow at 4× the mean carries 16× the weight); `power=0`
+reduces to plain MSE.
 
 2. **Nash-Sutcliffe Efficiency** (maximize → minimized as −NSE internally):
 
 $$NSE = 1 - \frac{\sum_t (Q_{obs,t}-Q_{pred,t})^2}{\sum_t (Q_{obs,t}-\overline{Q}_{obs})^2}$$
+
+Additional objectives available in `sparsehydro.calibration`: `LogNSE(epsilon)`
+(low-flow fidelity in log space — pairs well with a peak-focused objective for
+a well-spread Pareto front), `KGE`, `PBIAS`, `VolumeRelativeError`,
+`IndexOfAgreement`, `MSE`, `RMSE`, `MAE`. Note that `PeakWeightedMSE` and
+`NashSutcliffe` are both squared-error metrics and strongly correlated;
+pairing `PeakWeightedMSE(power=2)` with `LogNSE()` produces a genuine
+peak-vs-baseflow trade-off.
 
 ### Usage
 
