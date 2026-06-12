@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from .enums import ModelState
-from .parameters import ConstraintRecord, ScalarParameter, VectorParameter
+from .parameters import ConstraintRecord, FieldRecord, ScalarParameter, VectorParameter
 
 
 class IModel(ABC):
@@ -107,6 +107,7 @@ class IModel(ABC):
         self._scalar_parameters: dict[str, ScalarParameter] = {}
         self._vector_parameters: dict[str, VectorParameter] = {}
         self._constraint_registry: list[ConstraintRecord] = []
+        self._output_fields: dict[str, FieldRecord] = {}
 
     # ------------------------------------------------------------------
     # State queries
@@ -337,6 +338,92 @@ class IModel(ABC):
         return all(p.is_valid() for p in self._scalar_parameters.values()) and all(
             p.is_valid() for p in self._vector_parameters.values()
         )
+
+    # ------------------------------------------------------------------
+    # Output field registry
+    # ------------------------------------------------------------------
+
+    def register_output_field(self, field: FieldRecord) -> None:
+        """Register metadata for one column of the ``predict()`` output DataFrame.
+
+        Call inside :meth:`initialize` for every column your model writes so
+        that calibration tooling and notebooks can introspect the output
+        schema.  Registering ``datetime`` is encouraged even though it carries
+        no physical units.
+
+        If a field with the same name is already registered it is overwritten.
+
+        :param field: Column metadata.
+        :type field: FieldRecord
+        """
+        self._output_fields[field.name] = field
+
+    def get_output_field(self, name: str) -> FieldRecord:
+        """Return the :class:`~sparsehydro.parameters.FieldRecord` for *name*.
+
+        :param name: Column name as registered.
+        :type name: str
+        :returns: The matching field record.
+        :rtype: FieldRecord
+        :raises KeyError: If *name* has not been registered.
+        """
+        if name not in self._output_fields:
+            available = list(self._output_fields)
+            raise KeyError(
+                f"Output field '{name}' not found. "
+                f"Available fields: {available}"
+            )
+        return self._output_fields[name]
+
+    @property
+    def output_field_names(self) -> list[str]:
+        """Ordered list of registered output column names.
+
+        :rtype: list[str]
+        """
+        return list(self._output_fields)
+
+    @property
+    def output_fields(self) -> list[FieldRecord]:
+        """Ordered list of all registered :class:`~sparsehydro.parameters.FieldRecord` objects.
+
+        :rtype: list[FieldRecord]
+        """
+        return list(self._output_fields.values())
+
+    @property
+    def calibratable_output_names(self) -> list[str]:
+        """Names of output columns flagged as calibratable (``calibratable=True``).
+
+        These are the columns suitable for use as the ``predicted`` target in a
+        :class:`~sparsehydro.calibration.CalibrationProblem`.
+
+        :rtype: list[str]
+        """
+        return [f.name for f in self._output_fields.values() if f.calibratable]
+
+    def output_field_metadata(self) -> "pd.DataFrame":
+        """Return a DataFrame describing every registered output field.
+
+        Columns: ``field``, ``units``, ``calibratable``, ``description``.
+
+        Suitable for :func:`display` in Jupyter notebooks::
+
+            display(model.output_field_metadata())
+
+        :returns: One row per registered output field.
+        :rtype: pandas.DataFrame
+        """
+        rows = [
+            {
+                "field":        f.name,
+                "units":        f.units,
+                "calibratable": f.calibratable,
+                "description":  f.description,
+            }
+            for f in self._output_fields.values()
+        ]
+        return pd.DataFrame(rows)
 
     def register_inequality_constraint(self, record: ConstraintRecord) -> None:
         """Register a named inequality constraint.

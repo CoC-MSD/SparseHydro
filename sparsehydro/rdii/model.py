@@ -35,7 +35,7 @@ import pandas as pd
 
 from ..enums import ModelState
 from ..interfaces import IModel
-from ..parameters import ConstraintRecord, ScalarParameter
+from ..parameters import ConstraintRecord, FieldRecord, ScalarParameter
 from ..registry import registry
 from .initial_abstraction import IAModel
 from .rtk_triangle import RTKTriangle, triangular_uh
@@ -184,6 +184,31 @@ class RDIIModel(IModel):
                 "ia_T_freeze < ia_T_ref  "
                 "(freeze threshold must be below the reference temperature)"
             ),
+        ))
+
+        # --- Output field metadata ---
+        depth_units = "in" if self._units == "imperial" else "mm"
+        self.register_output_field(FieldRecord(
+            name="datetime",
+            description="Simulation time step",
+        ))
+        self.register_output_field(FieldRecord(
+            name="rdii_cfs",
+            units="CFS",
+            description="RDII flow rate — all RTK triangles combined",
+            calibratable=True,
+        ))
+        self.register_output_field(FieldRecord(
+            name=self._depth_col,
+            units=depth_units,
+            description="RDII depth per time step",
+            calibratable=False,
+        ))
+        self.register_output_field(FieldRecord(
+            name=self._excess_col,
+            units=depth_units,
+            description="Rainfall excess depth after initial abstraction",
+            calibratable=False,
         ))
 
         self._state = ModelState.INITIALIZED

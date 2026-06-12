@@ -53,7 +53,7 @@ import pandas as pd
 
 from ..enums import ModelState
 from ..interfaces import IModel
-from ..parameters import ScalarParameter
+from ..parameters import FieldRecord, ScalarParameter
 from ..registry import registry
 
 # ---------------------------------------------------------------------------
@@ -200,6 +200,21 @@ class SeasonalityModel(IModel):
                     units="-",
                     description=f"Sine coefficient: period '{p}', harmonic {n}",
                 ))
+        # --- Output field metadata ---
+        self.register_output_field(FieldRecord(
+            name="datetime",
+            description="Simulation time step",
+        ))
+        self.register_output_field(FieldRecord(
+            name=self._output_name,
+            units="",
+            description=(
+                f"Fourier-series sanitary base flow — "
+                f"{len(self._periods)} period(s) × {self._n_terms} harmonics"
+            ),
+            calibratable=True,
+        ))
+
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:

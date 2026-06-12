@@ -30,7 +30,7 @@ import pandas as pd
 
 from ..enums import ModelState
 from ..interfaces import IUnitHydroComponent
-from ..parameters import ScalarParameter
+from ..parameters import FieldRecord, ScalarParameter
 
 _FFT_THRESHOLD = 500
 
@@ -114,6 +114,18 @@ class RTKTriangle(IUnitHydroComponent):
             "K", value=self.K, lower_bound=1.001, upper_bound=10.0,
             units="-", description="Recession-to-peak ratio",
         ))
+        # --- Output field metadata ---
+        self.register_output_field(FieldRecord(
+            name="datetime",
+            description="Simulation time step",
+        ))
+        self.register_output_field(FieldRecord(
+            name="rdii_mm",
+            units="mm",
+            description="RDII depth contribution from this RTK triangle component",
+            calibratable=False,
+        ))
+
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:

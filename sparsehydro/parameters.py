@@ -138,6 +138,56 @@ class ScalarParameter:
 
 
 @dataclass
+class FieldRecord:
+    """Metadata for a single column in a model's ``predict()`` output DataFrame.
+
+    Register one :class:`FieldRecord` per output column during
+    :meth:`~sparsehydro.interfaces.IModel.initialize` so that calibration
+    tooling, notebooks, and downstream consumers can discover what each column
+    contains without inspecting the DataFrame itself.
+
+    :param name: Column name exactly as it appears in the ``predict()`` output
+        (e.g. ``"rdii_cfs"``, ``"total_cfs"``).
+    :type name: str
+    :param units: Physical units string (e.g. ``"CFS"``, ``"mm"``, ``"in"``).
+        Use ``""`` for dimensionless or non-physical columns such as
+        ``"datetime"``.
+    :type units: str
+    :param description: Human-readable explanation of what the field represents.
+    :type description: str
+    :param calibratable: ``True`` when this column can serve as the
+        ``predicted`` column in a
+        :class:`~sparsehydro.calibration.CalibrationProblem` — i.e. it is a
+        flow-rate or quantity directly comparable to an observed signal.
+        Diagnostic columns (depth, excess, datetime) should be ``False``.
+    :type calibratable: bool
+
+    Example::
+
+        from sparsehydro.parameters import FieldRecord
+
+        class MyModel(IModel):
+            def initialize(self) -> None:
+                self.register_output_field(FieldRecord(
+                    name="datetime",
+                    description="Simulation time step",
+                ))
+                self.register_output_field(FieldRecord(
+                    name="q_cfs",
+                    units="CFS",
+                    description="Predicted flow rate",
+                    calibratable=True,
+                ))
+                self._state = ModelState.INITIALIZED
+    """
+
+    name: str
+    units: str = ""
+    description: str = ""
+    calibratable: bool = False
+
+
+@dataclass
 class ConstraintRecord:
     """Metadata for a single inequality constraint registered by a model.
 

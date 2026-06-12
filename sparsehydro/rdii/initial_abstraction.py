@@ -56,7 +56,7 @@ import pandas as pd
 
 from ..enums import ModelState
 from ..interfaces import IModel
-from ..parameters import ScalarParameter
+from ..parameters import FieldRecord, ScalarParameter
 
 
 def _wet_step_excess(ia0: float, k_dep: float, P: float) -> float:
@@ -216,6 +216,19 @@ class IAModel(IModel):
                 "snow_ddf", value=self.snow_ddf, lower_bound=0.0, upper_bound=ddf_ub,
                 units=ddf_units, description="Degree-day snowmelt factor",
             ))
+
+        # --- Output field metadata ---
+        depth_units = "in" if self._units == "imperial" else "mm"
+        self.register_output_field(FieldRecord(
+            name="datetime",
+            description="Simulation time step",
+        ))
+        self.register_output_field(FieldRecord(
+            name=self._excess_col,
+            units=depth_units,
+            description="Rainfall excess depth after initial abstraction",
+            calibratable=False,
+        ))
 
         self._state = ModelState.INITIALIZED
 

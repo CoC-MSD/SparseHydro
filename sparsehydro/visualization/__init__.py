@@ -40,6 +40,7 @@ try:
         plot_calibration_timeseries,
         plot_cumulative_volume,
         plot_data_explorer,
+        plot_ensemble_components,
         plot_ensemble_timeseries,
         plot_residuals_scatter,
         plot_timeseries,
@@ -103,6 +104,9 @@ except ImportError:
     def plot_ensemble_timeseries(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_ensemble_timeseries. Install with: pip install plotly")
 
+    def plot_ensemble_components(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_ensemble_components. Install with: pip install plotly")
+
     from ..interfaces import IModel as _IModel  # noqa: E402
 
     class VisualizationModel(_IModel):  # type: ignore[no-redef]
@@ -131,6 +135,7 @@ __all__ = [
     "plot_cumulative_volume",
     "plot_data_explorer",
     "plot_ensemble_timeseries",
+    "plot_ensemble_components",
     "VisualizationModel",
     # Calibration
     "plot_pareto_evolution",

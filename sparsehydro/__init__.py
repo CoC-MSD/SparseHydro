@@ -2,7 +2,7 @@
 
 from .enums import ModelState
 from .interfaces import IModel
-from .parameters import ScalarParameter, VectorParameter
+from .parameters import FieldRecord, ScalarParameter, VectorParameter
 from .registry import ModelRegistry, registry
 from .unithydrograph import (
     UnitHydrographAdapter,
@@ -13,6 +13,7 @@ from .unithydrograph import (
 __version__ = "0.1.0"
 __all__ = [
     "ModelState",
+    "FieldRecord",
     "ScalarParameter",
     "VectorParameter",
     "IModel",
@@ -67,6 +68,7 @@ try:
         plot_cumulative_volume,
         plot_data_explorer,
         plot_ensemble_timeseries,
+        plot_ensemble_components,
         plot_pareto_evolution,
         plot_parallel_coordinates,
         plot_objective_convergence,
@@ -84,6 +86,7 @@ try:
         "plot_cumulative_volume",
         "plot_data_explorer",
         "plot_ensemble_timeseries",
+        "plot_ensemble_components",
         "plot_pareto_evolution",
         "plot_parallel_coordinates",
         "plot_objective_convergence",

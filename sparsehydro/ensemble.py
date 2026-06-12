@@ -44,14 +44,14 @@ Weight bounds: ``[0.0, 2.0]``.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import numpy as np
 import pandas as pd
 
 from .enums import ModelState
 from .interfaces import IModel
-from .parameters import ConstraintRecord, ScalarParameter
+from .parameters import ConstraintRecord, FieldRecord, ScalarParameter
 from .registry import registry
 
 
@@ -128,6 +128,7 @@ class EnsembleModel(IModel):
         self._output_name: str = output_name
         self._normalize_weights: bool = normalize_weights and (mode == "sum")
         self._param_maps: list[dict[str, str]] = []  # {orig_name: prefixed_name} per child
+        self._param_owner: dict[str, str] = {}  # prefixed_name → alias
 
     # ------------------------------------------------------------------
     # IModel lifecycle
@@ -179,6 +180,14 @@ class EnsembleModel(IModel):
                 mapping[orig_name] = prefixed
             self._param_maps.append(mapping)
 
+        # --- Build param_owner map ---
+        self._param_owner = {}
+        for i, alias in enumerate(self._aliases, 1):
+            self._param_owner[f"w_{i}"] = "weights"
+        for alias, mapping in zip(self._aliases, self._param_maps):
+            for prefixed_name in mapping.values():
+                self._param_owner[prefixed_name] = alias
+
         # --- Child constraint metadata (prefixed) ---
         for child, alias in zip(self._children, self._aliases):
             for cname, cdesc in zip(
@@ -189,6 +198,33 @@ class EnsembleModel(IModel):
                     name=f"{alias}_{cname}",
                     description=f"[{alias}] {cdesc}",
                 ))
+
+        # --- Output field metadata ---
+        self.register_output_field(FieldRecord(
+            name="datetime",
+            description="Simulation time step",
+        ))
+        for child, alias in zip(self._children, self._aliases):
+            child_calibratable = child.calibratable_output_names
+            self.register_output_field(FieldRecord(
+                name=f"{alias}_output",
+                units="",
+                description=(
+                    f"Raw signal from component '{alias}' "
+                    f"(calibratable outputs: {child_calibratable or 'n/a'})"
+                ),
+                calibratable=False,
+            ))
+        self.register_output_field(FieldRecord(
+            name=self._output_name,
+            units="",
+            description=(
+                f"Combined ensemble output ({self._mode} of "
+                f"{len(self._aliases)} components: "
+                f"{', '.join(self._aliases)})"
+            ),
+            calibratable=True,
+        ))
 
         # --- Ensemble-level weight constraint ---
         if self._normalize_weights:
@@ -294,6 +330,124 @@ class EnsembleModel(IModel):
         return g
 
     # ------------------------------------------------------------------
+    # Parameter inspection and configuration
+    # ------------------------------------------------------------------
+
+    def parameter_table(self) -> pd.DataFrame:
+        """Return a DataFrame summarising every registered scalar parameter.
+
+        Columns: ``parameter``, ``group``, ``value``, ``lower_bound``,
+        ``upper_bound``, ``units``, ``calibrate``, ``description``.
+
+        The ``group`` column contains the component alias that owns the
+        parameter (e.g. ``"rdii"``, ``"seas"``) or ``"weights"`` for
+        the mixing-weight parameters.
+
+        Intended for interactive inspection in Jupyter notebooks::
+
+            display(ensemble.parameter_table().style.format({"value": "{:.4g}"}))
+
+        :returns: One row per scalar parameter, in registration order.
+        :rtype: pandas.DataFrame
+        """
+        rows = []
+        for name in self.scalar_parameter_names:
+            p = self.get_scalar_parameter(name)
+            rows.append({
+                "parameter":   name,
+                "group":       self._param_owner.get(name, ""),
+                "value":       p.value,
+                "lower_bound": p.lower_bound,
+                "upper_bound": p.upper_bound,
+                "units":       p.units,
+                "calibrate":   p.calibrate,
+                "description": p.description,
+            })
+        return pd.DataFrame(rows)
+
+    def set_parameter(
+        self,
+        name: str,
+        *,
+        value: float | None = None,
+        lower_bound: float | None = None,
+        upper_bound: float | None = None,
+        calibrate: bool | None = None,
+    ) -> None:
+        """Update a parameter's value and/or bounds in-place.
+
+        Convenience wrapper around :meth:`~sparsehydro.parameters.ScalarParameter.update`
+        for ergonomic notebook configuration before calibration::
+
+            ensemble.set_parameter("w_1", value=1.0, calibrate=False)
+            ensemble.set_parameter("rdii_area_acres", lower_bound=100.0, upper_bound=2000.0)
+
+        :param name: Parameter name as shown in :meth:`parameter_table`.
+        :param value: New current value.
+        :param lower_bound: New lower bound.
+        :param upper_bound: New upper bound.
+        :param calibrate: Whether the optimizer should adjust this parameter.
+        :raises KeyError: If *name* is not registered.
+        :raises ValueError: If the resulting bounds are invalid.
+        """
+        self.get_scalar_parameter(name).update(
+            value=value,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            calibrate=calibrate,
+        )
+
+    def collect_pareto_predictions(
+        self,
+        data: Any,
+        result: Any,
+        output_col: str | None = None,
+        **prepare_kwargs: Any,
+    ) -> np.ndarray:
+        """Apply every Pareto-front solution and return their combined outputs.
+
+        Iterates over ``result.pareto_X``, sets the corresponding
+        parameter values, runs :meth:`prepare` and :meth:`predict`, and
+        collects the specified output column.  Parameter values are saved
+        before the loop and restored in a ``finally`` block so the model
+        is left in its original state.
+
+        .. note::
+            After this call the model is in ``PREDICTED`` state.  Call
+            ``ensemble.prepare(data)`` before the next ``ensemble.predict()``.
+
+        :param data: Forcing data forwarded to :meth:`prepare`.
+        :param result: A :class:`~sparsehydro.calibration.CalibrationResult`
+            (or any object with ``.param_names`` and ``.pareto_X``).
+        :param output_col: Column to extract from each ``predict()`` output.
+            Defaults to :attr:`output_name`.
+        :param prepare_kwargs: Extra keyword arguments forwarded to :meth:`prepare`.
+        :returns: Array of shape ``(n_solutions, n_timesteps)``.
+        :rtype: numpy.ndarray
+        """
+        if output_col is None:
+            output_col = self._output_name
+
+        saved = {
+            name: self.get_scalar_parameter(name).value
+            for name in result.param_names
+        }
+
+        preds: list[np.ndarray] = []
+        try:
+            for x in result.pareto_X:
+                for name, value in zip(result.param_names, x):
+                    self.get_scalar_parameter(name).value = float(value)
+                self.prepare(data, **prepare_kwargs)
+                sim = self.predict()
+                preds.append(np.asarray(sim[output_col], dtype=float))
+        finally:
+            for name, value in saved.items():
+                self.get_scalar_parameter(name).value = value
+
+        return np.array(preds)
+
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
@@ -328,3 +482,15 @@ class EnsembleModel(IModel):
     def n_components(self) -> int:
         """Number of child models."""
         return len(self._children)
+
+    @property
+    def param_owner(self) -> dict[str, str]:
+        """Mapping of prefixed parameter name → component alias.
+
+        Keys are parameter names as registered (e.g. ``"rdii_ia_max"``).
+        Values are the owning alias (e.g. ``"rdii"``) or ``"weights"``
+        for the mixing-weight parameters.  Available after :meth:`initialize`.
+
+        :rtype: dict[str, str]
+        """
+        return dict(self._param_owner)

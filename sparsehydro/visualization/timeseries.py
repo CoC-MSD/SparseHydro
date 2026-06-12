@@ -1060,6 +1060,209 @@ try:
         )
         return fig
 
+    # ------------------------------------------------------------------
+    # plot_ensemble_components
+    # ------------------------------------------------------------------
+
+    def plot_ensemble_components(
+        datetime,
+        rainfall,
+        observed: np.ndarray,
+        pred_df: pd.DataFrame,
+        aliases: list,
+        output_name: str = "ensemble_output",
+        pareto_predictions: "np.ndarray | None" = None,
+        confidence_percentiles: tuple = (10, 90),
+        component_labels: "dict | None" = None,
+        observed_label: str = "Observed",
+        rainfall_label: str = "Rainfall [mm]",
+        flow_label: str = "Flow",
+        title: str = "Ensemble Components",
+    ) -> "go.Figure":
+        """Multi-panel figure: rainfall | component signals | combined + Pareto band.
+
+        Three rows sharing a common X-axis (two when *rainfall* is ``None``):
+
+        * **Row 1** — Rainfall bars (inverted axis).  Omitted when *rainfall* is
+          ``None``.
+        * **Row 2** — Individual component signals, one filled-area trace per alias.
+          Components share a common Y-axis so their magnitudes can be compared
+          directly (not stacked).
+        * **Row 3** — Combined predicted signal (dashed), observed (solid black), and
+          an optional Pareto uncertainty band (shaded IQR between
+          *confidence_percentiles*).  Component outlines (thin dotted) are also
+          repeated here to show each contribution in context.
+
+        :param datetime: 1-D time axis aligned with *observed*.
+        :param rainfall: Rainfall array, or ``None`` to omit the top panel.
+        :param observed: 1-D observed flow array.
+        :param pred_df: Output of
+            :meth:`~sparsehydro.ensemble.EnsembleModel.predict`, containing
+            ``{alias}_output`` columns and *output_name*.
+        :param aliases: List of alias strings (e.g. ``["rdii", "seas"]``).
+        :param output_name: Column name for the combined output in *pred_df*.
+        :param pareto_predictions: Array of shape ``(n_solutions, n_timesteps)``
+            of combined-output predictions for all Pareto-front solutions.
+            Produced by
+            :meth:`~sparsehydro.ensemble.EnsembleModel.collect_pareto_predictions`.
+            When supplied, a shaded band is drawn in Row 3.
+        :param confidence_percentiles: ``(lower_pct, upper_pct)`` for the band.
+        :param component_labels: ``{alias: display_label}`` overrides.  Missing
+            aliases default to the alias string (title-cased).
+        :param observed_label: Legend label for the observed trace.
+        :param rainfall_label: Rainfall panel label.
+        :param flow_label: Y-axis label for component and combined panels.
+        :param title: Figure title.
+        :returns: Plotly Figure with 2–3 rows, shared X-axis.
+        :rtype: plotly.graph_objects.Figure
+        """
+        observed = np.asarray(observed, dtype=float)
+        has_rain = rainfall is not None
+        labels = component_labels or {}
+
+        _COLORS = [
+            ("#1f77b4", "rgba(31,119,180,0.18)"),
+            ("#2ca02c", "rgba(44,160,44,0.18)"),
+            ("#ff7f0e", "rgba(255,127,14,0.18)"),
+            ("#9467bd", "rgba(148,103,189,0.18)"),
+            ("#8c564b", "rgba(140,86,75,0.18)"),
+        ]
+
+        if has_rain:
+            n_rows = 3
+            row_heights = [0.13, 0.37, 0.50]
+            subplot_titles = [rainfall_label, "Component Signals", "Combined vs Observed"]
+        else:
+            n_rows = 2
+            row_heights = [0.40, 0.60]
+            subplot_titles = ["Component Signals", "Combined vs Observed"]
+
+        fig = make_subplots(
+            rows=n_rows, cols=1,
+            shared_xaxes=True,
+            row_heights=row_heights,
+            vertical_spacing=0.04,
+            subplot_titles=subplot_titles,
+        )
+
+        comp_row = 2 if has_rain else 1
+        comb_row = 3 if has_rain else 2
+
+        pred_dt = pred_df["datetime"] if "datetime" in pred_df.columns else datetime
+
+        # ── Row 1: Rainfall ──────────────────────────────────────────────
+        if has_rain:
+            fig.add_trace(
+                go.Bar(
+                    x=datetime,
+                    y=np.asarray(rainfall, dtype=float),
+                    name=rainfall_label,
+                    marker_color="steelblue",
+                    opacity=0.7,
+                    showlegend=False,
+                ),
+                row=1, col=1,
+            )
+            fig.update_yaxes(autorange="reversed", title_text=rainfall_label, row=1, col=1)
+
+        # ── Row 2: Individual component signals ──────────────────────────
+        for i, alias in enumerate(aliases):
+            col_name = f"{alias}_output"
+            if col_name not in pred_df.columns:
+                continue
+            line_color, fill_color = _COLORS[i % len(_COLORS)]
+            label = labels.get(alias, alias.replace("_", " ").title())
+            fig.add_trace(
+                go.Scatter(
+                    x=pred_dt,
+                    y=pred_df[col_name].to_numpy(dtype=float),
+                    mode="lines",
+                    name=label,
+                    line=dict(color=line_color, width=1.5),
+                    fill="tozeroy",
+                    fillcolor=fill_color,
+                    legendgroup=alias,
+                ),
+                row=comp_row, col=1,
+            )
+        fig.update_yaxes(title_text=flow_label, row=comp_row, col=1)
+
+        # ── Row 3: Combined + Pareto band + observed ─────────────────────
+        if pareto_predictions is not None:
+            pp = np.asarray(pareto_predictions, dtype=float)
+            lo = np.percentile(pp, confidence_percentiles[0], axis=0)
+            hi = np.percentile(pp, confidence_percentiles[1], axis=0)
+            dt_arr = np.asarray(pred_dt)
+            fig.add_trace(
+                go.Scatter(
+                    x=np.concatenate([dt_arr, dt_arr[::-1]]),
+                    y=np.concatenate([hi, lo[::-1]]),
+                    fill="toself",
+                    fillcolor="rgba(220,50,50,0.12)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name=(
+                        f"Pareto band "
+                        f"({confidence_percentiles[0]}–{confidence_percentiles[1]}%)"
+                    ),
+                    showlegend=True,
+                ),
+                row=comb_row, col=1,
+            )
+
+        # Component outlines (thin dotted) for context in the combined panel
+        for i, alias in enumerate(aliases):
+            col_name = f"{alias}_output"
+            if col_name not in pred_df.columns:
+                continue
+            line_color, _ = _COLORS[i % len(_COLORS)]
+            label = labels.get(alias, alias.replace("_", " ").title())
+            fig.add_trace(
+                go.Scatter(
+                    x=pred_dt,
+                    y=pred_df[col_name].to_numpy(dtype=float),
+                    mode="lines",
+                    name=label,
+                    line=dict(color=line_color, width=1, dash="dot"),
+                    showlegend=False,
+                    legendgroup=alias,
+                ),
+                row=comb_row, col=1,
+            )
+
+        if output_name in pred_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=pred_dt,
+                    y=pred_df[output_name].to_numpy(dtype=float),
+                    mode="lines",
+                    name="Predicted (total)",
+                    line=dict(color="crimson", width=2, dash="dash"),
+                ),
+                row=comb_row, col=1,
+            )
+
+        fig.add_trace(
+            go.Scatter(
+                x=datetime,
+                y=observed,
+                mode="lines",
+                name=observed_label,
+                line=dict(color="black", width=1.5),
+            ),
+            row=comb_row, col=1,
+        )
+        fig.update_yaxes(title_text=flow_label, row=comb_row, col=1)
+        fig.update_xaxes(title_text="Date / Time", row=comb_row, col=1)
+
+        fig.update_layout(
+            title=title,
+            height=700,
+            hovermode="x unified",
+            legend=dict(x=1.02, y=1.0),
+            barmode="overlay",
+        )
+        return fig
+
 except ImportError:
 
     def plot_timeseries(*args, **kwargs):  # type: ignore[misc]
@@ -1079,6 +1282,9 @@ except ImportError:
 
     def plot_ensemble_timeseries(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_ensemble_timeseries. Install with: pip install plotly")
+
+    def plot_ensemble_components(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_ensemble_components. Install with: pip install plotly")
 
     class VisualizationModel(IModel):  # type: ignore[no-redef]
         model_name = "visualization"
