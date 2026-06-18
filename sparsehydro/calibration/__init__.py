@@ -16,6 +16,7 @@ Public API
 | :class:`VolumeRelativeError` | Relative total volume error                  |
 | :class:`LogNSE`            | NSE on log-transformed flows                   |
 | :class:`IndexOfAgreement`  | Willmott's index of agreement                  |
+| :class:`ConcordanceCorrelationCoefficient` | Lin's concordance correlation coefficient |
 +----------------------------+------------------------------------------------+
 | :class:`CalibrationProblem`| Wraps any IModel + observed + objectives       |
 | :class:`CalibrationResult` | Pareto front + generation history              |
@@ -42,6 +43,7 @@ from .objectives import (
     VolumeRelativeError,
     LogNSE,
     IndexOfAgreement,
+    ConcordanceCorrelationCoefficient,
 )
 from .problem import CalibrationProblem
 from .result import CalibrationResult, GenerationRecord, _identify_pareto
@@ -60,6 +62,7 @@ __all__ = [
     "VolumeRelativeError",
     "LogNSE",
     "IndexOfAgreement",
+    "ConcordanceCorrelationCoefficient",
     # Problem
     "CalibrationProblem",
     # Result

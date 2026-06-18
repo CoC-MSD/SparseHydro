@@ -223,6 +223,55 @@ def volume_relative_error(
     return float(abs(float(np.sum(pred)) - total_obs) / total_obs)
 
 
+def concordance_correlation_coefficient(
+    observed: np.ndarray,
+    predicted: np.ndarray,
+) -> float:
+    """Lin's Concordance Correlation Coefficient (CCC).
+
+    Measures the agreement between observed and predicted values by combining
+    both precision (Pearson correlation) and accuracy (closeness to the
+    45-degree line of perfect concordance).
+
+    .. math::
+
+        \\rho_c = \\frac{2\\,\\sigma_{op}}
+                        {\\sigma_o^2 + \\sigma_p^2 + (\\mu_o - \\mu_p)^2}
+
+    where :math:`\\sigma_{op}` is the covariance, :math:`\\sigma_o^2` and
+    :math:`\\sigma_p^2` are the variances, and :math:`\\mu_o`, :math:`\\mu_p`
+    are the means.  CCC = 1 for perfect agreement, −1 for perfect inverse
+    agreement, and 0 when there is no linear relationship.
+
+    :param observed: 1-D array of observed flow values.
+    :type observed: numpy.ndarray
+    :param predicted: 1-D array of predicted flow values (same length).
+    :type predicted: numpy.ndarray
+    :returns: CCC in [−1, 1] (higher is better, 1 is perfect).
+    :rtype: float
+    :raises ValueError: If arrays differ in shape, or the denominator is zero
+        (both series are constant and equal).
+    """
+    obs = np.asarray(observed, dtype=float)
+    pred = np.asarray(predicted, dtype=float)
+    if obs.shape != pred.shape:
+        raise ValueError(
+            f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}"
+        )
+    mean_obs = float(np.mean(obs))
+    mean_pred = float(np.mean(pred))
+    var_obs = float(np.var(obs))
+    var_pred = float(np.var(pred))
+    covariance = float(np.mean((obs - mean_obs) * (pred - mean_pred)))
+    denominator = var_obs + var_pred + (mean_obs - mean_pred) ** 2
+    if denominator == 0.0:
+        raise ValueError(
+            "Denominator is zero; both series are constant and equal — "
+            "CCC is undefined."
+        )
+    return float(2.0 * covariance / denominator)
+
+
 def index_of_agreement(
     observed: np.ndarray,
     predicted: np.ndarray,

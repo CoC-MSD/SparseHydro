@@ -20,7 +20,8 @@ Built-in objectives
 | :class:`LogNSE`           | False    | NSE on log-transformed flows             |
 | :class:`KGE`              | False    | Kling–Gupta efficiency                   |
 | :class:`IndexOfAgreement` | False    | Willmott's Index of Agreement            |
-+---------------------------+----------+------------------------------------------+
+| :class:`ConcordanceCorrelationCoefficient` | False | Lin's Concordance Correlation Coefficient |
++------------------------------------------+----------+------------------------------------------+
 
 Custom objectives
 -----------------
@@ -71,6 +72,41 @@ class IObjective(ABC):
         :raises ValueError: If arrays are incompatible or the score is
             undefined (e.g. constant observed series for NSE).
         """
+
+    def compute(
+        self,
+        observed: np.ndarray,
+        predicted: np.ndarray,
+        mask: np.ndarray | None = None,
+    ) -> float:
+        """Evaluate the objective, optionally restricting to a subset of steps.
+
+        :param observed: 1-D array of observed values.
+        :type observed: numpy.ndarray
+        :param predicted: 1-D array of predicted values (same shape).
+        :type predicted: numpy.ndarray
+        :param mask: Boolean array of the same length as *observed*.  Only
+            positions where ``mask`` is ``True`` are included in the
+            computation.  ``None`` (default) uses all values.
+        :type mask: numpy.ndarray or None
+        :returns: Scalar objective value computed over the selected subset.
+        :rtype: float
+        :raises ValueError: If *mask* length does not match *observed*, or if
+            all mask values are ``False`` (empty subset).
+        """
+        obs = np.asarray(observed, dtype=float)
+        pred = np.asarray(predicted, dtype=float)
+        if mask is not None:
+            m = np.asarray(mask, dtype=bool)
+            if m.shape != obs.shape:
+                raise ValueError(
+                    f"mask shape {m.shape} does not match observed shape {obs.shape}"
+                )
+            if not m.any():
+                raise ValueError("mask selects no elements; cannot compute objective.")
+            obs = obs[m]
+            pred = pred[m]
+        return self.evaluate(obs, pred)
 
 
 # ---------------------------------------------------------------------------
@@ -345,3 +381,32 @@ class IndexOfAgreement(IObjective):
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
         from sparsehydro.rdii.objectives import index_of_agreement
         return index_of_agreement(observed, predicted)
+
+
+class ConcordanceCorrelationCoefficient(IObjective):
+    """Lin's Concordance Correlation Coefficient (CCC).
+
+    Combines precision (Pearson correlation) and accuracy (closeness to the
+    perfect-concordance line) into a single coefficient bounded to [−1, 1]:
+
+    .. math::
+
+        \\rho_c = \\frac{2\\,\\sigma_{op}}
+                        {\\sigma_o^2 + \\sigma_p^2 + (\\mu_o - \\mu_p)^2}
+
+    CCC = 1 for perfect agreement between observed and predicted.  Unlike
+    Pearson correlation alone, CCC penalises systematic bias and scale
+    differences, making it sensitive to both random and systematic error.
+
+    :cvar name: ``"ccc"``
+    :cvar minimize: ``False``
+
+    :raises ValueError: If both series are constant and equal (denominator zero).
+    """
+
+    name = "ccc"
+    minimize = False
+
+    def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
+        from sparsehydro.rdii.objectives import concordance_correlation_coefficient
+        return concordance_correlation_coefficient(observed, predicted)
