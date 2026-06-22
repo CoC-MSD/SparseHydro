@@ -46,6 +46,7 @@ from .combined_model import CombinedHydroModel
 from .initial_abstraction import IAModel
 from .model import RDIIModel
 from .objectives import nash_sutcliffe, peak_weighted_mse
+from .rtk_ensemble import default_rtk_params, make_rtk_ensemble
 from .rtk_triangle import RTKTriangle, triangular_uh
 from .seasonality import SeasonalityModel, compute_time_features
 
@@ -59,6 +60,8 @@ __all__ = [
     "compute_time_features",
     "peak_weighted_mse",
     "nash_sutcliffe",
+    "default_rtk_params",
+    "make_rtk_ensemble",
 ]
 
 try:

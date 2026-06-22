@@ -45,6 +45,9 @@ class SequentialFitSummary:
         Full-domain stormflow.  Columns: ``datetime``, ``stormflow``.
     model_class_name : str
         Name of the model class produced by ``model_factory``.
+    fitted_effective_areas : list[float]
+        Fitted effective area per event: ``sum(Q_pred) / sum(rain)`` over the
+        event window.  Parallel to *events* and *calibration_results*.
     """
 
     events: list[EventRecord]
@@ -52,6 +55,7 @@ class SequentialFitSummary:
     global_predicted: pd.DataFrame
     global_observed: pd.DataFrame
     model_class_name: str
+    fitted_effective_areas: list[float]
 
     def parameter_evolution(self) -> pd.DataFrame:
         """Return fitted parameters indexed by event.
@@ -82,6 +86,52 @@ class SequentialFitSummary:
             for name, val in zip(result.objective_names, display_F):
                 row[name] = val
             rows.append(row)
+        return pd.DataFrame(rows)
+
+    def calibrated_areas(self) -> list[float]:
+        """Return the calibrated UH area parameter per event.
+
+        For a single UH model this is the ``A`` parameter.
+        For an ensemble (aliases like ``fast_A``, ``slow_A``) it is the sum of all
+        ``*_A`` parameters — consistent with ``mode="sum"`` and fixed weights of 1.0.
+
+        Returns a list parallel to :attr:`events` and :attr:`calibration_results`.
+
+        Raises
+        ------
+        ValueError
+            If no ``A``-bearing parameter is found in the calibration result.
+        """
+        result: list[float] = []
+        for cal in self.calibration_results:
+            params = dict(zip(cal.param_names, cal.pareto_X[0]))
+            a_params = {k: v for k, v in params.items()
+                        if k == "A" or k.endswith("_A")}
+            if not a_params:
+                raise ValueError(
+                    f"No 'A' parameter found among calibrated params: {list(params.keys())}"
+                )
+            result.append(float(sum(a_params.values())))
+        return result
+
+    def effective_area_summary(self) -> pd.DataFrame:
+        """Return observed and fitted effective area per event.
+
+        Columns: ``event_id``, ``start_datetime``, ``observed_ae``, ``fitted_ae``.
+
+        ``observed_ae`` is taken from :attr:`EventRecord.effective_area` (total
+        observed stormflow / total rain over the event window).  ``fitted_ae``
+        is the model-predicted equivalent computed during :meth:`SequentialFitter.fit`.
+        """
+        rows = [
+            {
+                "event_id": e.event_id,
+                "start_datetime": e.start_datetime,
+                "observed_ae": e.effective_area,
+                "fitted_ae": ae,
+            }
+            for e, ae in zip(self.events, self.fitted_effective_areas)
+        ]
         return pd.DataFrame(rows)
 
 
@@ -159,6 +209,7 @@ class SequentialFitter:
                 global_predicted=pd.DataFrame({"datetime": data["datetime"], "Q_pred": np.zeros(len(data))}),
                 global_observed=data[["datetime", "stormflow"]].copy(),
                 model_class_name=self._factory().__class__.__name__,
+                fitted_effective_areas=[],
             )
 
         datetime_arr = data["datetime"].values
@@ -167,6 +218,7 @@ class SequentialFitter:
 
         cal_results: list[CalibrationResult] = []
         fitted_events: list[EventRecord] = []
+        fitted_areas: list[float] = []
         last_x: np.ndarray | None = None
         last_param_names: list[str] = []
 
@@ -243,7 +295,13 @@ class SequentialFitter:
                 if name in model_i.scalar_parameter_names:
                     model_i.get_scalar_parameter(name).update(value=float(val))
 
+            # Update observed Ae from raw data (handles CSV events where effective_area=0)
+            orig_rain = float(data[fit_mask]["rain"].values.sum())
+            orig_flow = float(np.maximum(data[fit_mask]["stormflow"].values, 0.0).sum())
+            event.effective_area = orig_flow / orig_rain if orig_rain > 0 else 0.0
+
             app_data = data[app_mask].copy().reset_index(drop=True)
+            fitted_ae = 0.0
             if len(app_data) > 0:
                 try:
                     model_i.prepare(app_data)
@@ -253,6 +311,12 @@ class SequentialFitter:
                     Q_global[app_indices[:pred_len]] += q_app[:pred_len]
                     Q_residual[app_indices[:pred_len]] -= q_app[:pred_len]
                     Q_residual = np.maximum(Q_residual, 0.0)
+
+                    # Fitted Ae: sum(Q_pred over event window) / sum(rain over event window)
+                    n_event = len(event_data)
+                    rain_event_sum = float(event_data["rain"].values.sum())
+                    if rain_event_sum > 0 and n_event <= len(q_app):
+                        fitted_ae = float(q_app[:n_event].sum()) / rain_event_sum
                 except Exception as exc:
                     if verbose:
                         print(f"  Application window prediction failed: {exc!r}")
@@ -261,6 +325,7 @@ class SequentialFitter:
             last_param_names = problem.param_names
             cal_results.append(cal_result)
             fitted_events.append(event)
+            fitted_areas.append(fitted_ae)
 
         return SequentialFitSummary(
             events=fitted_events,
@@ -268,6 +333,7 @@ class SequentialFitter:
             global_predicted=pd.DataFrame({"datetime": datetime_arr, "Q_pred": Q_global}),
             global_observed=data[["datetime", "stormflow"]].copy(),
             model_class_name=self._factory().__class__.__name__,
+            fitted_effective_areas=fitted_areas,
         )
 
     def _optimise(self, problem, x0, xl, xu, method, obj_idx):

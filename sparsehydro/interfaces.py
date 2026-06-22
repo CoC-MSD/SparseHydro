@@ -343,6 +343,47 @@ class IModel(ABC):
     # Output field registry
     # ------------------------------------------------------------------
 
+    def apply_parameter_values(
+        self,
+        values: "dict[str, float]",
+        *,
+        skip_missing: bool = True,
+    ) -> "list[str]":
+        """Apply a mapping of parameter names → values in-place.
+
+        Designed for warm-starting from a previously saved calibration result::
+
+            import json
+            payload = json.loads(Path("best_params.json").read_text())
+            model.apply_parameter_values(payload["parameters"])
+
+        Only the ``value`` field of each :class:`~sparsehydro.parameters.ScalarParameter`
+        is modified — bounds, units, and the ``calibrate`` flag are preserved.
+
+        :param values: Mapping of parameter name to the new scalar value.
+        :param skip_missing: When ``True`` (default), names absent from the
+            registry are silently ignored, so a saved dict can be applied even
+            when the model has slightly fewer parameters (e.g. after removing a
+            triangle).  When ``False``, an unknown name raises :class:`KeyError`.
+        :returns: Ordered list of parameter names that were actually applied.
+        :rtype: list[str]
+        :raises KeyError: If *skip_missing* is ``False`` and any name is not
+            registered.
+        """
+        applied: list[str] = []
+        for name, value in values.items():
+            if name not in self._scalar_parameters:
+                if not skip_missing:
+                    available = list(self._scalar_parameters)
+                    raise KeyError(
+                        f"Parameter '{name}' is not registered. "
+                        f"Available parameters: {available}"
+                    )
+                continue
+            self._scalar_parameters[name].value = float(value)
+            applied.append(name)
+        return applied
+
     def register_output_field(self, field: FieldRecord) -> None:
         """Register metadata for one column of the ``predict()`` output DataFrame.
 
