@@ -5,7 +5,7 @@ lifecycle without depending on the legacy ``UnitHydrograph`` adapter.
 
 All models return a DataFrame with ``"Q_pred"`` as the predicted-flow column,
 so the same ``CalibrationProblem.column_map`` works for both single models and
-:class:`~sparsehydro.ensemble.EnsembleModel` composites.
+:class:`~sparsehydro.models.EnsembleModel` composites.
 
 Kernel normalisation: ``sum(get_kernel(dt)) * dt ≈ 1.0``  (units: [1/hr])
 
@@ -21,9 +21,9 @@ import numpy as np
 import pandas as pd
 from scipy.special import gamma as gamma_func
 
-from ..enums import ModelState
-from ..interfaces import IUnitHydroComponent
-from ..parameters import ScalarParameter
+from ...enums import ModelState
+from ..base import IUnitHydroComponent
+from ...parameters import ScalarParameter
 
 _MAX_STEPS = 864  # 72 h at 5-min intervals
 

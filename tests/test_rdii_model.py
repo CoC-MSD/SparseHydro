@@ -17,14 +17,20 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from sparsehydro.rdii import (
+from sparsehydro.models.rdii import (
     IAModel,
     RDIIModel,
     RTKTriangle,
-    nash_sutcliffe,
-    peak_weighted_mse,
     triangular_uh,
 )
+from sparsehydro.calibration.objectives import NashSutcliffe, PeakWeightedMSE
+
+# Convenience wrappers that match old function-call style used in TestObjectives
+def nash_sutcliffe(obs, pred):
+    return NashSutcliffe().evaluate(obs, pred)
+
+def peak_weighted_mse(obs, pred):
+    return PeakWeightedMSE().evaluate(obs, pred)
 
 # ---------------------------------------------------------------------------
 # Optional-dependency flags
@@ -61,9 +67,23 @@ def _make_sample_df(n: int = 48) -> pd.DataFrame:
     })
 
 
+def _make_rtk_components(n: int) -> list:
+    """Return n RTKTriangle components with default parameters."""
+    defaults = [
+        (0.05, 1.0, 1.5),
+        (0.03, 12.0, 2.0),
+        (0.02, 72.0, 3.0),
+    ]
+    components = []
+    for i in range(n):
+        R, T, K = defaults[i] if i < len(defaults) else (0.01, float(6 * (i + 1)), 2.0)
+        components.append(RTKTriangle(R=R, T=T, K=K))
+    return components
+
+
 def _prepared_model(n_triangles: int = 3) -> RDIIModel:
     """Return a fully prepared RDIIModel using the sample DataFrame (metric)."""
-    m = RDIIModel(n_triangles=n_triangles, units="metric")
+    m = RDIIModel(uh_components=_make_rtk_components(n_triangles), units="metric")
     m.initialize()
     m.validate()
     m.prepare(_make_sample_df())
@@ -531,7 +551,7 @@ class TestRDIIModel(unittest.TestCase):
         self.sample_df = _make_sample_df()
 
     def _prepared(self, n_triangles: int = 3) -> RDIIModel:
-        m = RDIIModel(n_triangles=n_triangles, units="metric")
+        m = RDIIModel(uh_components=_make_rtk_components(n_triangles), units="metric")
         m.initialize()
         self.assertTrue(m.validate())
         m.prepare(self.sample_df)
@@ -551,16 +571,16 @@ class TestRDIIModel(unittest.TestCase):
     def test_initial_state_created(self):
         self.assertTrue(RDIIModel().is_created())
 
-    def test_zero_triangles_raises(self):
+    def test_invalid_units_raises(self):
         with self.assertRaises(ValueError):
-            RDIIModel(n_triangles=0)
+            RDIIModel(units="furlongs")
 
     # --- initialize ---
 
     def test_initialize_param_count(self):
         for n in (1, 2, 3, 5):
-            with self.subTest(n_triangles=n):
-                m = RDIIModel(n_triangles=n)
+            with self.subTest(n_components=n):
+                m = RDIIModel(uh_components=_make_rtk_components(n))
                 m.initialize()
                 self.assertEqual(len(m.scalar_parameter_names), 8 + 3 * n)
 
@@ -574,11 +594,13 @@ class TestRDIIModel(unittest.TestCase):
         self.assertTrue(ia_expected.issubset(set(m.scalar_parameter_names)))
 
     def test_initialize_rtk_params_present(self):
-        m = RDIIModel(n_triangles=2)
+        m = RDIIModel(uh_components=_make_rtk_components(2))
         m.initialize()
+        # R_1, R_2 are own params; shape params are uh1_T, uh1_K, uh2_T, uh2_K
         for i in (1, 2):
-            for prefix in ("R", "T", "K"):
-                self.assertIn(f"{prefix}_{i}", m.scalar_parameter_names)
+            self.assertIn(f"R_{i}", m.scalar_parameter_names)
+            self.assertIn(f"uh{i}_T", m.scalar_parameter_names)
+            self.assertIn(f"uh{i}_K", m.scalar_parameter_names)
 
     # --- validate ---
 
@@ -591,7 +613,7 @@ class TestRDIIModel(unittest.TestCase):
     def test_validate_fails_R_sum_exceeds_one(self):
         # validate() no longer blocks on R_sum > 1; the constraint is now
         # enforced by the solver via inequality_constraints().
-        m = RDIIModel(n_triangles=3)
+        m = RDIIModel(uh_components=_make_rtk_components(3))
         m.initialize()
         for i in range(1, 4):
             m._scalar_parameters[f"R_{i}"].value = 0.5
@@ -599,7 +621,8 @@ class TestRDIIModel(unittest.TestCase):
         self.assertTrue(m.validate())
         # but inequality_constraints should report a violation
         g = m.inequality_constraints()
-        self.assertEqual(len(g), 1)
+        # new model has 2 constraints: sum_R_leq_1 and T_freeze_lt_T_ref
+        self.assertEqual(len(g), 2)
         self.assertGreater(g[0], 0.0)   # 1.5 - 1.0 = 0.5 > 0 → infeasible
 
     def test_validate_fails_T_freeze_ge_T_ref(self):
@@ -709,13 +732,11 @@ class TestRDIIModel(unittest.TestCase):
         m.finalize()
         self.assertTrue(m.is_finalized())
         self.assertIsNone(m._prepared_df)
-        self.assertIsNone(m._p_excess)
-        self.assertEqual(m._uh_kernels, [])
 
     # --- full lifecycle ---
 
     def test_full_lifecycle(self):
-        m = RDIIModel(n_triangles=2, units="metric")
+        m = RDIIModel(uh_components=_make_rtk_components(2), units="metric")
         m.initialize()
         self.assertTrue(m.validate())
         m.prepare(self.sample_df)
@@ -749,7 +770,7 @@ class TestRDIIModel(unittest.TestCase):
             rain = np.zeros(len(dates))
             rain[5] = rain_in
             df = pd.DataFrame({"datetime": dates, "rainfall_in": rain, "temperature_c": 15.0})
-            m = RDIIModel(n_triangles=1, units="imperial")
+            m = RDIIModel(uh_components=[RTKTriangle(R=0.05, T=1.0, K=1.5)], units="imperial")
             m.initialize()
             m.get_scalar_parameter("ia_max").update(value=0.0, lower_bound=0.0)
             m.get_scalar_parameter("ia_k_dep").update(value=0.0, lower_bound=0.0)
@@ -892,7 +913,7 @@ class TestVisualization(unittest.TestCase):
 
     def test_plot_timeseries_returns_figure(self):
         import plotly.graph_objects as go
-        from sparsehydro.rdii import plot_timeseries
+        from sparsehydro.visualization import plot_timeseries
         fig = plot_timeseries(
             datetime=self.sample_df["datetime"],
             rainfall_mm=self.sample_df["rainfall_mm"].to_numpy(),
@@ -903,7 +924,7 @@ class TestVisualization(unittest.TestCase):
 
     def test_plot_timeseries_no_observed(self):
         import plotly.graph_objects as go
-        from sparsehydro.rdii import plot_timeseries
+        from sparsehydro.visualization import plot_timeseries
         fig = plot_timeseries(
             datetime=self.sample_df["datetime"],
             rainfall_mm=self.sample_df["rainfall_mm"].to_numpy(),
@@ -914,24 +935,24 @@ class TestVisualization(unittest.TestCase):
 
     def test_plot_pareto_evolution_returns_figure(self):
         import plotly.graph_objects as go
-        from sparsehydro.rdii import plot_pareto_evolution
+        from sparsehydro.visualization import plot_pareto_evolution
         fig = plot_pareto_evolution(self.opt_result)
         self.assertIsInstance(fig, go.Figure)
 
     def test_plot_pareto_evolution_frame_count(self):
-        from sparsehydro.rdii import plot_pareto_evolution
+        from sparsehydro.visualization import plot_pareto_evolution
         fig = plot_pareto_evolution(self.opt_result)
         self.assertEqual(len(fig.frames), len(self.opt_result.history))
 
     def test_plot_parallel_coordinates_returns_figure(self):
         import plotly.graph_objects as go
-        from sparsehydro.rdii import plot_parallel_coordinates
+        from sparsehydro.visualization import plot_parallel_coordinates
         fig = plot_parallel_coordinates(self.opt_result)
         self.assertIsInstance(fig, go.Figure)
 
     def test_plot_parallel_coordinates_color_by_pwmse(self):
         import plotly.graph_objects as go
-        from sparsehydro.rdii import plot_parallel_coordinates
+        from sparsehydro.visualization import plot_parallel_coordinates
         fig = plot_parallel_coordinates(self.opt_result, color_by="peak_weighted_mse")
         self.assertIsInstance(fig, go.Figure)
 

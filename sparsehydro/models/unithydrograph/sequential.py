@@ -20,11 +20,11 @@ from scipy.optimize import Bounds, minimize as scipy_minimize
 from scipy.optimize import differential_evolution
 from scipy.signal import savgol_filter
 
-from ..calibration.objectives import RMSE, KGE, NashSutcliffe, IObjective
-from ..calibration.problem import CalibrationProblem
-from ..calibration.result import CalibrationResult
-from ..interfaces import IModel
-from ..events import EventRecord
+from ...calibration.objectives import RMSE, KGE, NashSutcliffe, IObjective
+from ...calibration.problem import CalibrationProblem
+from ...calibration.result import CalibrationResult
+from ..base import IModel
+from ...events import EventRecord
 
 
 @dataclass
@@ -95,8 +95,6 @@ class SequentialFitSummary:
         For an ensemble (aliases like ``fast_A``, ``slow_A``) it is the sum of all
         ``*_A`` parameters — consistent with ``mode="sum"`` and fixed weights of 1.0.
 
-        Returns a list parallel to :attr:`events` and :attr:`calibration_results`.
-
         Raises
         ------
         ValueError
@@ -118,10 +116,6 @@ class SequentialFitSummary:
         """Return observed and fitted effective area per event.
 
         Columns: ``event_id``, ``start_datetime``, ``observed_ae``, ``fitted_ae``.
-
-        ``observed_ae`` is taken from :attr:`EventRecord.effective_area` (total
-        observed stormflow / total rain over the event window).  ``fitted_ae``
-        is the model-predicted equivalent computed during :meth:`SequentialFitter.fit`.
         """
         rows = [
             {
@@ -136,14 +130,14 @@ class SequentialFitSummary:
 
 
 class SequentialFitter:
-    """Fit an :class:`~sparsehydro.interfaces.IModel` to storm events one by one.
+    """Fit an :class:`~sparsehydro.models.IModel` to storm events one by one.
 
     Parameters
     ----------
     model_factory : callable
-        Zero-argument callable returning a fresh :class:`~sparsehydro.interfaces.IModel`
+        Zero-argument callable returning a fresh :class:`~sparsehydro.models.IModel`
         in CREATED state.  Works with single UH models and
-        :class:`~sparsehydro.ensemble.EnsembleModel`::
+        :class:`~sparsehydro.models.EnsembleModel`::
 
             SequentialFitter(lambda: GammaUH(), data, events)
             SequentialFitter(lambda: make_ensemble(), data, events)
@@ -295,7 +289,6 @@ class SequentialFitter:
                 if name in model_i.scalar_parameter_names:
                     model_i.get_scalar_parameter(name).update(value=float(val))
 
-            # Update observed Ae from raw data (handles CSV events where effective_area=0)
             orig_rain = float(data[fit_mask]["rain"].values.sum())
             orig_flow = float(np.maximum(data[fit_mask]["stormflow"].values, 0.0).sum())
             event.effective_area = orig_flow / orig_rain if orig_rain > 0 else 0.0
@@ -312,7 +305,6 @@ class SequentialFitter:
                     Q_residual[app_indices[:pred_len]] -= q_app[:pred_len]
                     Q_residual = np.maximum(Q_residual, 0.0)
 
-                    # Fitted Ae: sum(Q_pred over event window) / sum(rain over event window)
                     n_event = len(event_data)
                     rain_event_sum = float(event_data["rain"].values.sum())
                     if rain_event_sum > 0 and n_event <= len(q_app):

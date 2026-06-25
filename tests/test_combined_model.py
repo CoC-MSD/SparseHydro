@@ -6,8 +6,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sparsehydro.rdii import IAModel, RDIIModel
-from sparsehydro.rdii.combined_model import CombinedHydroModel
+from sparsehydro.models.rdii import IAModel, RDIIModel
+
+# CombinedHydroModel is now just RDIIModel (same API, same parameters)
+CombinedHydroModel = RDIIModel
 
 _MM_TO_IN = 1.0 / 25.4
 

@@ -82,7 +82,7 @@ def mock_uh_module(monkeypatch):
     monkeypatch.setitem(sys.modules, "uh_models", mock_module)
 
     # Reset the lazy-import cache so each test gets a fresh mock class.
-    import sparsehydro.unithydrograph.adapter as _adapter_mod
+    import sparsehydro.models.unithydrograph.adapter as _adapter_mod
     monkeypatch.setattr(_adapter_mod, "_UnitHydrograph", None)
 
     yield mock_module.UnitHydrograph
@@ -113,40 +113,40 @@ def _make_rain_df(n: int = 6) -> pd.DataFrame:
 
 class TestCreateUhModel:
     def test_returns_concrete_subclass(self, fresh_registry):
-        from sparsehydro.unithydrograph.adapter import (
+        from sparsehydro.models.unithydrograph.adapter import (
             UnitHydrographAdapter, create_uh_model,
         )
-        with patch("sparsehydro.unithydrograph.adapter.registry", fresh_registry):
+        with patch("sparsehydro.models.unithydrograph.adapter.registry", fresh_registry):
             cls = create_uh_model("Nash")
         assert issubclass(cls, UnitHydrographAdapter)
 
     def test_model_name_slug(self, fresh_registry):
-        from sparsehydro.unithydrograph.adapter import create_uh_model
-        with patch("sparsehydro.unithydrograph.adapter.registry", fresh_registry):
+        from sparsehydro.models.unithydrograph.adapter import create_uh_model
+        with patch("sparsehydro.models.unithydrograph.adapter.registry", fresh_registry):
             cls = create_uh_model("Nash")
         assert cls.model_name == "uh-nash"
 
     def test_uh_model_name_set(self, fresh_registry):
-        from sparsehydro.unithydrograph.adapter import create_uh_model
-        with patch("sparsehydro.unithydrograph.adapter.registry", fresh_registry):
+        from sparsehydro.models.unithydrograph.adapter import create_uh_model
+        with patch("sparsehydro.models.unithydrograph.adapter.registry", fresh_registry):
             cls = create_uh_model("Gamma")
         assert cls._uh_model_name == "Gamma"
 
     def test_registered_in_registry(self, fresh_registry):
-        from sparsehydro.unithydrograph.adapter import create_uh_model
-        with patch("sparsehydro.unithydrograph.adapter.registry", fresh_registry):
+        from sparsehydro.models.unithydrograph.adapter import create_uh_model
+        with patch("sparsehydro.models.unithydrograph.adapter.registry", fresh_registry):
             create_uh_model("Nash")
         assert fresh_registry.is_registered("uh-nash")
 
     def test_unknown_name_raises(self, fresh_registry):
-        from sparsehydro.unithydrograph.adapter import create_uh_model
-        with patch("sparsehydro.unithydrograph.adapter.registry", fresh_registry):
+        from sparsehydro.models.unithydrograph.adapter import create_uh_model
+        with patch("sparsehydro.models.unithydrograph.adapter.registry", fresh_registry):
             with pytest.raises(KeyError, match="Ghost"):
                 create_uh_model("Ghost")
 
     def test_duplicate_registration_raises(self, fresh_registry):
-        from sparsehydro.unithydrograph.adapter import create_uh_model
-        with patch("sparsehydro.unithydrograph.adapter.registry", fresh_registry):
+        from sparsehydro.models.unithydrograph.adapter import create_uh_model
+        with patch("sparsehydro.models.unithydrograph.adapter.registry", fresh_registry):
             create_uh_model("Nash")
             with pytest.raises(ValueError, match="already registered"):
                 create_uh_model("Nash")
@@ -158,16 +158,16 @@ class TestCreateUhModel:
 
 class TestRegisterAll:
     def test_all_mock_models_registered(self, fresh_registry):
-        from sparsehydro.unithydrograph.adapter import register_all_uh_models
-        with patch("sparsehydro.unithydrograph.adapter.registry", fresh_registry):
+        from sparsehydro.models.unithydrograph.adapter import register_all_uh_models
+        with patch("sparsehydro.models.unithydrograph.adapter.registry", fresh_registry):
             result = register_all_uh_models()
         assert "uh-nash" in result
         assert "uh-gamma" in result
         assert len(result) == len(_MOCK_REGISTRY)
 
     def test_idempotent(self, fresh_registry):
-        from sparsehydro.unithydrograph.adapter import register_all_uh_models
-        with patch("sparsehydro.unithydrograph.adapter.registry", fresh_registry):
+        from sparsehydro.models.unithydrograph.adapter import register_all_uh_models
+        with patch("sparsehydro.models.unithydrograph.adapter.registry", fresh_registry):
             r1 = register_all_uh_models()
             r2 = register_all_uh_models()
         assert r1 == r2
@@ -180,8 +180,8 @@ class TestRegisterAll:
 class TestAdapterLifecycle:
     @pytest.fixture()
     def nash_cls(self, fresh_registry):
-        from sparsehydro.unithydrograph.adapter import create_uh_model
-        with patch("sparsehydro.unithydrograph.adapter.registry", fresh_registry):
+        from sparsehydro.models.unithydrograph.adapter import create_uh_model
+        with patch("sparsehydro.models.unithydrograph.adapter.registry", fresh_registry):
             return create_uh_model("Nash")
 
     def test_initial_state(self, nash_cls):
@@ -258,8 +258,8 @@ class TestAdapterLifecycle:
 class TestParameterSync:
     @pytest.fixture()
     def nash_model(self, fresh_registry):
-        from sparsehydro.unithydrograph.adapter import create_uh_model
-        with patch("sparsehydro.unithydrograph.adapter.registry", fresh_registry):
+        from sparsehydro.models.unithydrograph.adapter import create_uh_model
+        with patch("sparsehydro.models.unithydrograph.adapter.registry", fresh_registry):
             cls = create_uh_model("Nash")
         m = cls()
         m.initialize()
@@ -295,7 +295,7 @@ class TestParameterSync:
 
 class TestBaseAdapterGuard:
     def test_direct_instantiation_raises_on_initialize(self):
-        from sparsehydro.unithydrograph.adapter import UnitHydrographAdapter
+        from sparsehydro.models.unithydrograph.adapter import UnitHydrographAdapter
         m = UnitHydrographAdapter()
         with pytest.raises(TypeError, match="_uh_model_name"):
             m.initialize()

@@ -29,22 +29,11 @@ fine timestep:
 
     IA_avail(t+Δt) = IA_avail(t) * exp(-k_dep * ΔP)
 
-Closed form (see :func:`_wet_step_excess`): when ``k_dep * IA_avail <= 1`` the
-excess is ``ΔP - IA_avail * (1 - exp(-k_dep * ΔP))``; otherwise no excess is
-produced until the within-step rain depth ``p* = ln(k_dep * IA_avail) / k_dep``
-has been absorbed.  ``k_dep`` controls how aggressively the remaining capacity
-is applied to a given storm (rule of thumb: k_dep ≈ 1 / IA_max; both
-k_dep → 0 and k_dep → ∞ reduce total absorption — the interior maximizes it).
-
 Optional degree-day snow model (``snow=True``):
 
     T <= snow_T :  SWE += ΔP ;  liquid input = 0          (snowfall)
     T >  snow_T :  melt = min(SWE, snow_ddf * (T - snow_T) * Δt_days)
                    SWE -= melt ;  liquid input = ΔP + melt (rain-on-snow adds)
-
-The liquid input replaces raw rainfall in the IA wet/dry logic, so cold-season
-precipitation is stored and released during warm spells — producing melt-driven
-flow on days with little or no rain.
 """
 
 from __future__ import annotations
@@ -54,29 +43,13 @@ import math
 import numpy as np
 import pandas as pd
 
-from ..enums import ModelState
-from ..interfaces import IModel
-from ..parameters import FieldRecord, ScalarParameter
+from ...enums import ModelState
+from ..base import IModel
+from ...parameters import FieldRecord, ScalarParameter
 
 
 def _wet_step_excess(ia0: float, k_dep: float, P: float) -> float:
-    """Exact rainfall excess for one wet step (uniform intra-step rainfall).
-
-    Integrates the IA depletion ODE ``d(ia)/dp = -k_dep * ia`` within the step,
-    so the result is invariant to sub-step refinement (it equals the limit of
-    uniformly disaggregating the step to an arbitrarily fine timestep).
-
-    - ``k_dep * ia0 <= 1``: the bucket never absorbs the full rain rate, so
-      ``excess = P - ia0 * (1 - exp(-k_dep * P))`` (identical to the lumped form).
-    - ``k_dep * ia0 > 1``: no excess until the within-step depth
-      ``p* = ln(k_dep * ia0) / k_dep`` has fallen, then
-      ``excess = (P - p*) - (1/k_dep - ia0 * exp(-k_dep * P))``.
-
-    :param ia0: Available capacity at the start of the step [mm].
-    :param k_dep: Depletion rate [1/mm].
-    :param P: Rainfall depth in the step [mm].
-    :returns: Rainfall excess [mm], in [0, P].
-    """
+    """Exact rainfall excess for one wet step (uniform intra-step rainfall)."""
     if P <= 0.0:
         return 0.0
     if k_dep * ia0 <= 1.0:
@@ -88,7 +61,7 @@ def _wet_step_excess(ia0: float, k_dep: float, P: float) -> float:
 
 
 class IAModel(IModel):
-    """Stateful initial-abstraction model implementing the :class:`~sparsehydro.interfaces.IModel` lifecycle.
+    """Stateful initial-abstraction model implementing the :class:`~sparsehydro.models.IModel` lifecycle.
 
     Constructor arguments seed the :meth:`initialize` parameter registry.
     After :meth:`initialize`, calibratable values live in the scalar-parameter
@@ -105,14 +78,9 @@ class IAModel(IModel):
         or 0.3 /mm (metric).  Pass ``None`` to use the unit-appropriate default.
     :param T_freeze: Temperature below which recovery is suppressed [°C].
     :param units: Unit system — ``"imperial"`` (default, inches) or ``"metric"`` (mm).
-    :param snow: Enable the degree-day snow model.  When ``True``, registers
-        the calibratable parameters ``snow_T`` (rain/snow partition and melt
-        base [°C]) and ``snow_ddf`` (degree-day melt factor [depth/(°C·day)]).
-        Precipitation on days with ``T <= snow_T`` accumulates as snow-water
-        equivalent and is released as melt during warm spells.
+    :param snow: Enable the degree-day snow model.
     :param snow_T: Initial rain/snow threshold & melt base [°C].
-    :param snow_ddf: Initial degree-day factor.  Defaults to 0.12 in/(°C·day)
-        (imperial) or 3.0 mm/(°C·day) (metric).
+    :param snow_ddf: Initial degree-day factor.
     """
 
     model_name = "initial-abstraction"
@@ -217,7 +185,6 @@ class IAModel(IModel):
                 units=ddf_units, description="Degree-day snowmelt factor",
             ))
 
-        # --- Output field metadata ---
         depth_units = "in" if self._units == "imperial" else "mm"
         self.register_output_field(FieldRecord(
             name="datetime",
@@ -233,11 +200,7 @@ class IAModel(IModel):
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:
-        """Validate parameter bounds and physical constraint T_freeze < T_ref.
-
-        :returns: ``True`` if all parameters are in bounds and constraints hold.
-        :rtype: bool
-        """
+        """Validate parameter bounds and physical constraint T_freeze < T_ref."""
         if not self.parameters_valid():
             return False
         T_freeze = self.get_scalar_parameter("ia_T_freeze").value
@@ -248,14 +211,7 @@ class IAModel(IModel):
         return True
 
     def prepare(self, data: pd.DataFrame) -> None:
-        """Load forcing data and sync parameters from the registry.
-
-        :param data: DataFrame with columns ``datetime``,
-            ``rainfall_in`` (imperial) or ``rainfall_mm`` (metric),
-            and optionally ``temperature_c``.
-        :type data: pandas.DataFrame
-        :raises ValueError: If required columns are absent.
-        """
+        """Load forcing data and sync parameters from the registry."""
         required = {"datetime", self._rainfall_col}
         missing = required - set(data.columns)
         if missing:
@@ -278,15 +234,7 @@ class IAModel(IModel):
         self._state = ModelState.PREPARED
 
     def predict(self) -> pd.DataFrame:
-        """Compute rainfall excess for the prepared time series.
-
-        Parameter values changed after :meth:`prepare` are picked up
-        automatically (required by :class:`~sparsehydro.calibration.problem.CalibrationProblem`).
-
-        :returns: DataFrame with columns ``datetime`` and ``p_excess_mm``.
-        :rtype: pandas.DataFrame
-        :raises RuntimeError: If :meth:`prepare` has not been called.
-        """
+        """Compute rainfall excess for the prepared time series."""
         if self._prepared_df is None:
             raise RuntimeError("Call prepare(data) before predict().")
 
@@ -329,25 +277,14 @@ class IAModel(IModel):
     # ------------------------------------------------------------------
 
     def recovery_rate(self, temperature: float | None = None) -> float:
-        """Compute k_rec(T) = k0 + kT * exp(θ*(T - T_ref)), zeroed below T_freeze.
-
-        :param temperature: Air temperature [°C]. ``None`` defaults to ``T_ref``.
-        :returns: Recovery rate [1/hr].
-        :rtype: float
-        """
+        """Compute k_rec(T) = k0 + kT * exp(θ*(T - T_ref)), zeroed below T_freeze."""
         T = self.T_ref if temperature is None else float(temperature)
         if T < self.T_freeze:
             return 0.0
         return self.k0 + self.kT * math.exp(self.theta * (T - self.T_ref))
 
     def step_dry(self, dt_hours: float, temperature: float | None = None) -> float:
-        """Advance ``ia_avail`` over a dry interval of ``dt_hours``.
-
-        :param dt_hours: Duration of dry interval [hr].
-        :param temperature: Air temperature [°C]. ``None`` uses ``T_ref``.
-        :returns: Updated ``ia_avail`` [mm].
-        :rtype: float
-        """
+        """Advance ``ia_avail`` over a dry interval of ``dt_hours``."""
         k = self.recovery_rate(temperature)
         deficit = self.ia_max - self.ia_avail
         self.ia_avail = self.ia_max - deficit * math.exp(-k * dt_hours)
@@ -355,16 +292,7 @@ class IAModel(IModel):
         return self.ia_avail
 
     def step_wet(self, delta_precip_mm: float) -> float:
-        """Deplete ``ia_avail`` for a rainfall pulse of ``delta_precip_mm`` mm.
-
-        Drains the storage by the consumed volume
-        ``IA_consumed = IA_avail * (1 - exp(-k_dep * ΔP))``, i.e.
-        ``IA_avail *= exp(-k_dep * ΔP)``.
-
-        :param delta_precip_mm: Rainfall depth [mm], must be ≥ 0.
-        :returns: Updated ``ia_avail`` [mm].
-        :rtype: float
-        """
+        """Deplete ``ia_avail`` for a rainfall pulse of ``delta_precip_mm`` mm."""
         if delta_precip_mm <= 0.0:
             return self.ia_avail
         self.ia_avail = self.ia_avail * math.exp(-self.k_dep * delta_precip_mm)
@@ -372,17 +300,7 @@ class IAModel(IModel):
         return self.ia_avail
 
     def compute_excess(self, rainfall_mm: float) -> float:
-        """Return rainfall excess and deplete ``ia_avail`` accordingly.
-
-        Uses the exact within-step integral of the depletion ODE (see
-        :func:`_wet_step_excess`), so the result is invariant to sub-step
-        refinement.  The storage drains as ``IA_avail *= exp(-k_dep * P)``
-        via :meth:`step_wet`.
-
-        :param rainfall_mm: Rainfall depth for this time step [mm].
-        :returns: Rainfall excess [mm].
-        :rtype: float
-        """
+        """Return rainfall excess and deplete ``ia_avail`` accordingly."""
         if rainfall_mm <= 0.0:
             return 0.0
         excess = _wet_step_excess(self.ia_avail, self.k_dep, rainfall_mm)
@@ -416,24 +334,6 @@ class IAModel(IModel):
 
         Pure function (no instance state) — safe for parallel optimizer use.
         ``ia_avail`` starts at ``ia_max`` (fully saturated capacity).
-
-        :param rainfall_mm: 1-D array of rainfall depths [mm] per time step.
-        :param dt_hours: 1-D array of time-step durations [hr].
-        :param temperature: 1-D array of temperatures [°C], or ``None`` to
-            use ``T_ref`` for every step.
-        :param ia_max: Maximum abstraction capacity [mm].
-        :param k0: Base recovery rate [1/hr].
-        :param kT: Temperature-dependent recovery coefficient [1/hr].
-        :param theta: Temperature sensitivity exponent [1/°C].
-        :param T_ref: Reference temperature [°C].
-        :param k_dep: Depletion rate [1/mm].
-        :param T_freeze: Freeze threshold [°C].
-        :param snow_ddf: Degree-day snowmelt factor [mm/(°C·day)].  Ignored
-            when ``snow_T`` is ``None``.
-        :param snow_T: Rain/snow partition threshold and melt base [°C], or
-            ``None`` to disable the snow model (default).
-        :returns: 1-D array of rainfall excess values [mm].
-        :rtype: numpy.ndarray
         """
         n = len(rainfall_mm)
         excess = np.zeros(n, dtype=float)
@@ -450,17 +350,14 @@ class IAModel(IModel):
 
             if snow_on:
                 if T <= snow_T:
-                    # Snowfall: store precip as SWE; no liquid input this step
                     swe += P
                     P = 0.0
                 elif swe > 0.0:
-                    # Degree-day melt; rain-on-snow adds melt to liquid input
                     melt = min(swe, snow_ddf * (T - snow_T) * dt / 24.0)
                     swe -= melt
                     P += melt
 
             if P <= 0.0:
-                # Dry step: recover
                 if T >= T_freeze:
                     k_rec = k0 + kT * math.exp(theta * (T - T_ref))
                 else:
@@ -468,9 +365,6 @@ class IAModel(IModel):
                 deficit = ia_max - ia_avail
                 ia_avail = ia_max - deficit * math.exp(-k_rec * dt)
             else:
-                # Wet step: exact within-step integral of the depletion ODE
-                # (invariant to sub-step refinement); drain matches the
-                # absorbed path exactly.
                 excess[i] = _wet_step_excess(ia_avail, k_dep, P)
                 ia_avail = ia_avail * math.exp(-k_dep * P)
 

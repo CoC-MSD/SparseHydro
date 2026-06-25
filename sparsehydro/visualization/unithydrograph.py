@@ -22,7 +22,7 @@ from plotly.subplots import make_subplots
 
 from ..events import EventRecord
 from ..filters import FilterResult
-from ..unithydrograph.sequential import SequentialFitSummary
+from ..models.unithydrograph.sequential import SequentialFitSummary
 
 _D3 = [
     "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",

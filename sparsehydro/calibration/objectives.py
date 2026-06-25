@@ -203,8 +203,7 @@ class PeakWeightedMSE(IObjective):
         self.power = float(power)
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        from sparsehydro.rdii.objectives import peak_weighted_mse
-        return peak_weighted_mse(observed, predicted, power=self.power)
+        return _peak_weighted_mse(observed, predicted, power=self.power)
 
 
 # ---------------------------------------------------------------------------
@@ -230,8 +229,7 @@ class NashSutcliffe(IObjective):
     minimize = False
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        from sparsehydro.rdii.objectives import nash_sutcliffe
-        return nash_sutcliffe(observed, predicted)
+        return _nash_sutcliffe(observed, predicted)
 
 
 class KGE(IObjective):
@@ -296,8 +294,7 @@ class PBIAS(IObjective):
     minimize = True
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        from sparsehydro.rdii.objectives import pbias
-        return pbias(observed, predicted)
+        return _pbias(observed, predicted)
 
 
 class VolumeRelativeError(IObjective):
@@ -320,8 +317,7 @@ class VolumeRelativeError(IObjective):
     minimize = True
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        from sparsehydro.rdii.objectives import volume_relative_error
-        return volume_relative_error(observed, predicted)
+        return _volume_relative_error(observed, predicted)
 
 
 class LogNSE(IObjective):
@@ -354,8 +350,7 @@ class LogNSE(IObjective):
         self.epsilon = epsilon
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        from sparsehydro.rdii.objectives import log_nse
-        return log_nse(observed, predicted, epsilon=self.epsilon)
+        return _log_nse(observed, predicted, epsilon=self.epsilon)
 
 
 class IndexOfAgreement(IObjective):
@@ -379,8 +374,7 @@ class IndexOfAgreement(IObjective):
     minimize = False
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        from sparsehydro.rdii.objectives import index_of_agreement
-        return index_of_agreement(observed, predicted)
+        return _index_of_agreement(observed, predicted)
 
 
 class ConcordanceCorrelationCoefficient(IObjective):
@@ -408,5 +402,112 @@ class ConcordanceCorrelationCoefficient(IObjective):
     minimize = False
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
-        from sparsehydro.rdii.objectives import concordance_correlation_coefficient
-        return concordance_correlation_coefficient(observed, predicted)
+        return _concordance_correlation_coefficient(observed, predicted)
+
+
+# ---------------------------------------------------------------------------
+# Pure function implementations (no external dependencies)
+# ---------------------------------------------------------------------------
+
+def _peak_weighted_mse(
+    observed: np.ndarray,
+    predicted: np.ndarray,
+    power: float = 1.0,
+) -> float:
+    obs = np.asarray(observed, dtype=float)
+    pred = np.asarray(predicted, dtype=float)
+    if obs.shape != pred.shape:
+        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
+    if power < 0.0:
+        raise ValueError(f"power must be >= 0; got {power!r}")
+    mean_obs = float(np.mean(obs))
+    if mean_obs == 0.0:
+        raise ValueError("observed is all zeros; peak-weighted MSE is undefined.")
+    weights = (obs / mean_obs) ** power
+    w_sum = float(np.sum(weights))
+    if w_sum == 0.0:
+        return 0.0
+    return float(np.sum(weights * (obs - pred) ** 2) / w_sum)
+
+
+def _nash_sutcliffe(observed: np.ndarray, predicted: np.ndarray) -> float:
+    obs = np.asarray(observed, dtype=float)
+    pred = np.asarray(predicted, dtype=float)
+    if obs.shape != pred.shape:
+        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
+    ss_res = float(np.sum((obs - pred) ** 2))
+    ss_tot = float(np.sum((obs - np.mean(obs)) ** 2))
+    if ss_tot == 0.0:
+        raise ValueError("SS_tot is zero; observed series is constant — NSE is undefined.")
+    return 1.0 - ss_res / ss_tot
+
+
+def _pbias(observed: np.ndarray, predicted: np.ndarray) -> float:
+    obs = np.asarray(observed, dtype=float)
+    pred = np.asarray(predicted, dtype=float)
+    if obs.shape != pred.shape:
+        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
+    total_obs = float(np.sum(obs))
+    if total_obs == 0.0:
+        raise ValueError("sum(observed) is zero; PBIAS is undefined.")
+    return float(abs(100.0 * np.sum(obs - pred) / total_obs))
+
+
+def _log_nse(
+    observed: np.ndarray,
+    predicted: np.ndarray,
+    epsilon: float = 0.01,
+) -> float:
+    obs = np.asarray(observed, dtype=float)
+    pred = np.asarray(predicted, dtype=float)
+    if obs.shape != pred.shape:
+        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
+    if epsilon <= 0.0:
+        raise ValueError(f"epsilon must be > 0; got {epsilon!r}")
+    log_obs = np.log(obs + epsilon)
+    log_pred = np.log(np.clip(pred, 0.0, None) + epsilon)
+    ss_res = float(np.sum((log_obs - log_pred) ** 2))
+    ss_tot = float(np.sum((log_obs - np.mean(log_obs)) ** 2))
+    if ss_tot == 0.0:
+        raise ValueError("SS_tot is zero; log-transformed observed series is constant.")
+    return float(1.0 - ss_res / ss_tot)
+
+
+def _volume_relative_error(observed: np.ndarray, predicted: np.ndarray) -> float:
+    obs = np.asarray(observed, dtype=float)
+    pred = np.asarray(predicted, dtype=float)
+    if obs.shape != pred.shape:
+        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
+    total_obs = float(np.sum(obs))
+    if total_obs == 0.0:
+        raise ValueError("sum(observed) is zero; volume relative error is undefined.")
+    return float(abs(float(np.sum(pred)) - total_obs) / total_obs)
+
+
+def _concordance_correlation_coefficient(observed: np.ndarray, predicted: np.ndarray) -> float:
+    obs = np.asarray(observed, dtype=float)
+    pred = np.asarray(predicted, dtype=float)
+    if obs.shape != pred.shape:
+        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
+    mean_obs = float(np.mean(obs))
+    mean_pred = float(np.mean(pred))
+    var_obs = float(np.var(obs))
+    var_pred = float(np.var(pred))
+    covariance = float(np.mean((obs - mean_obs) * (pred - mean_pred)))
+    denominator = var_obs + var_pred + (mean_obs - mean_pred) ** 2
+    if denominator == 0.0:
+        raise ValueError("Denominator is zero; CCC is undefined.")
+    return float(2.0 * covariance / denominator)
+
+
+def _index_of_agreement(observed: np.ndarray, predicted: np.ndarray) -> float:
+    obs = np.asarray(observed, dtype=float)
+    pred = np.asarray(predicted, dtype=float)
+    if obs.shape != pred.shape:
+        raise ValueError(f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}")
+    mean_obs = float(np.mean(obs))
+    ss_res = float(np.sum((obs - pred) ** 2))
+    ss_pot = float(np.sum((np.abs(pred - mean_obs) + np.abs(obs - mean_obs)) ** 2))
+    if ss_pot == 0.0:
+        raise ValueError("Potential error (SS_pot) is zero; Index of Agreement is undefined.")
+    return float(1.0 - ss_res / ss_pot)

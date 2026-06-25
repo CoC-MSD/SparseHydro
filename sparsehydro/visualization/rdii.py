@@ -57,13 +57,7 @@ try:
         :returns: Plotly Figure — one filled trace per triangle.
         :rtype: plotly.graph_objects.Figure
         """
-        try:
-            from ..rdii.rtk_triangle import triangular_uh
-        except ImportError as exc:
-            raise ImportError(
-                "sparsehydro.rdii is required for plot_rtk_shape. "
-                "Install with: pip install sparsehydro[rdii]"
-            ) from exc
+        from ..models.rdii.rtk_triangle import triangular_uh
 
         if not isinstance(triangles, (list, tuple)):
             triangles = [triangles]

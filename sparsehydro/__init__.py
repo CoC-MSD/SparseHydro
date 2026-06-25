@@ -1,10 +1,14 @@
 """sparsehydro — interfaces and utilities for parsimonious hydrological models."""
 
 from .enums import ModelState
-from .interfaces import IModel
 from .parameters import FieldRecord, ScalarParameter, VectorParameter
 from .registry import ModelRegistry, registry
-from .unithydrograph import (
+from .filters import FilterResult, apply_savgol_filter, compute_thresholds
+from .events import EventRecord, detect_events, events_to_dataframe, load_events_from_csv
+
+from .models import IModel, IUnitHydroComponent, EnsembleModel, SeasonalityModel
+from .models.rdii import IAModel, RTKTriangle, RTKEnsembleModel, triangular_uh, default_rtk_params, RDIIModel
+from .models.unithydrograph import (
     UnitHydrographAdapter,
     create_uh_model,
     register_all_uh_models,
@@ -14,8 +18,6 @@ from .unithydrograph import (
     SequentialFitter,
     SequentialFitSummary,
 )
-from .filters import FilterResult, apply_savgol_filter, compute_thresholds
-from .events import EventRecord, detect_events, events_to_dataframe, load_events_from_csv
 
 __version__ = "0.1.0"
 __all__ = [
@@ -23,9 +25,28 @@ __all__ = [
     "FieldRecord",
     "ScalarParameter",
     "VectorParameter",
-    "IModel",
     "ModelRegistry",
     "registry",
+    "FilterResult",
+    "apply_savgol_filter",
+    "compute_thresholds",
+    "EventRecord",
+    "detect_events",
+    "events_to_dataframe",
+    "load_events_from_csv",
+    # models
+    "IModel",
+    "IUnitHydroComponent",
+    "EnsembleModel",
+    "SeasonalityModel",
+    # rdii
+    "IAModel",
+    "RTKTriangle",
+    "RTKEnsembleModel",
+    "triangular_uh",
+    "default_rtk_params",
+    "RDIIModel",
+    # unithydrograph
     "UnitHydrographAdapter",
     "create_uh_model",
     "register_all_uh_models",
@@ -34,50 +55,14 @@ __all__ = [
     "TriangleUH",
     "SequentialFitter",
     "SequentialFitSummary",
-    "FilterResult",
-    "apply_savgol_filter",
-    "compute_thresholds",
-    "EventRecord",
-    "detect_events",
-    "events_to_dataframe",
-    "load_events_from_csv",
-    "ITorchModel",
     "__version__",
 ]
 
 try:
-    from .torch_model import ITorchModel
+    from .models import ITorchModel
+    __all__ += ["ITorchModel"]
 except ImportError:  # pragma: no cover
     pass
-
-try:
-    from .rdii import (
-        IAModel,
-        RTKTriangle,
-        triangular_uh,
-        RDIIModel,
-        CombinedHydroModel,
-        SeasonalityModel,
-        compute_time_features,
-        peak_weighted_mse,
-        nash_sutcliffe,
-    )
-    __all__ += [
-        "IAModel",
-        "RTKTriangle",
-        "triangular_uh",
-        "RDIIModel",
-        "CombinedHydroModel",
-        "SeasonalityModel",
-        "compute_time_features",
-        "peak_weighted_mse",
-        "nash_sutcliffe",
-    ]
-except ImportError:  # pragma: no cover
-    pass
-
-from .ensemble import EnsembleModel
-__all__ += ["EnsembleModel"]
 
 try:
     from .visualization import (
