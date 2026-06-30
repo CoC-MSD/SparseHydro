@@ -53,6 +53,174 @@ flowchart LR
     RESULT --> VIZ
 ```
 
+## Object relationships
+
+Every model subclasses the abstract `IModel` lifecycle and exposes named
+`ScalarParameter` / `VectorParameter` objects through a built-in registry.
+Calibration tooling discovers those parameters automatically, so the same
+objects flow unchanged from model construction through to visualization.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class ModelState {
+        <<enumeration>>
+        CREATED
+        INITIALIZED
+        VALIDATED
+        PREPARED
+        PREDICTED
+        FINALIZED
+    }
+
+    class IModel {
+        <<abstract>>
+        +str model_name
+        +ModelState state
+        +initialize()
+        +validate() bool
+        +prepare(data)
+        +predict() DataFrame
+        +finalize()
+        +register_scalar_parameter(p)
+        +get_scalar_parameter(name) ScalarParameter
+    }
+
+    class ScalarParameter {
+        +str name
+        +float value
+        +float lower_bound
+        +float upper_bound
+        +bool calibrate
+        +is_valid() bool
+        +normalize() float
+        +clamp() ScalarParameter
+    }
+
+    class VectorParameter {
+        +str name
+        +ndarray values
+        +int size
+        +is_valid() bool
+    }
+
+    class IUnitHydroComponent {
+        <<abstract>>
+    }
+    class ITorchModel {
+        <<abstract>>
+        +forward() Tensor
+    }
+
+    IModel "1" o-- "*" ScalarParameter : registers
+    IModel "1" o-- "*" VectorParameter : registers
+    IModel ..> ModelState : has state
+    IUnitHydroComponent --|> IModel
+    ITorchModel --|> IModel
+
+    RDIIModel --|> IModel
+    IAModel --|> IModel
+    AMMModel --|> IModel
+    EnsembleModel --|> IModel
+    SeasonalityModel --|> IModel
+    RTKTriangle --|> IUnitHydroComponent
+    GammaUH --|> IUnitHydroComponent
+    UnitHydrographAdapter --|> IUnitHydroComponent
+    EnsembleModel "1" o-- "*" IModel : composes
+    RDIIModel "1" *-- "1" IAModel : contains
+    RDIIModel "1" *-- "*" RTKTriangle : contains
+```
+
+The calibration layer is solver-agnostic: a single `CalibrationProblem` wraps a
+model, its data, and one or more `IObjective` functions, then passes unchanged
+to any `ISolver`, which returns a `CalibrationResult`.
+
+```mermaid
+classDiagram
+    direction LR
+
+    class CalibrationProblem {
+        +IModel model
+        +objectives IObjective[]
+        +dict column_map
+        +param_names str[]
+        +int n_params
+        +evaluate(x) ndarray
+    }
+
+    class IObjective {
+        <<abstract>>
+        +str name
+        +bool minimize
+        +evaluate(observed, predicted) float
+    }
+
+    class ISolver {
+        <<abstract>>
+        +solve(problem) CalibrationResult
+    }
+
+    class CalibrationResult {
+        +ndarray pareto_X
+        +ndarray pareto_F
+        +history GenerationRecord[]
+        +best_by(name) dict
+        +to_pareto_dataframe() DataFrame
+    }
+
+    CalibrationProblem o-- IModel : wraps
+    CalibrationProblem o-- "1..*" IObjective : scores with
+    ISolver ..> CalibrationProblem : consumes
+    ISolver ..> CalibrationResult : produces
+
+    NSGAIISolver --|> ISolver
+    ParticleSwarmSolver --|> ISolver
+    ScipySolver --|> ISolver
+    PlatypusSolver --|> ISolver
+
+    MSE --|> IObjective
+    NashSutcliffe --|> IObjective
+    KGE --|> IObjective
+    PeakWeightedMSE --|> IObjective
+```
+
+## Calibration workflow
+
+The typical end-to-end calibration loop — build the model, wrap it in a problem,
+solve, then inspect and visualize the results:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User
+    participant Model as IModel
+    participant Problem as CalibrationProblem
+    participant Solver as ISolver
+    participant Obj as IObjective
+    participant Result as CalibrationResult
+    participant Viz as Visualization
+
+    User->>Model: initialize()
+    User->>Model: validate()
+    User->>Problem: CalibrationProblem(model, data, objectives, column_map)
+    Problem->>Model: prepare(data)
+    Note over Problem: discovers calibratable<br/>ScalarParameters and bounds
+
+    User->>Solver: solve(problem)
+    loop each candidate / generation
+        Solver->>Problem: evaluate(x)
+        Problem->>Model: set parameters and predict()
+        Model-->>Problem: predicted series
+        Problem->>Obj: evaluate(observed, predicted)
+        Obj-->>Problem: scores
+        Problem-->>Solver: objective vector F
+    end
+    Solver-->>Result: pareto_X, pareto_F, history
+    Result-->>User: best_by(), to_pareto_dataframe()
+    User->>Viz: plot_pareto_evolution(result)
+```
+
 ## Features
 
 - **Model lifecycle** — enforced six-state progression:
@@ -138,7 +306,7 @@ model.finalize()
 
 ```python
 import pandas as pd
-from sparsehydro.rdii import RDIIModel
+from sparsehydro.models.rdii import RDIIModel
 from sparsehydro.calibration import (
     CalibrationProblem,
     ParticleSwarmSolver,
