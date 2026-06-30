@@ -36,8 +36,11 @@ class RTKTriangle(IUnitHydroComponent):
     """Triangular RTK unit hydrograph component.
 
     :param R: Fraction of rainfall excess entering the sewer [0, 1].
+    :type R: float
     :param T: Time to peak [hr] (must be > 0).
+    :type T: float
     :param K: Ratio of recession time to time-to-peak (must be > 1).
+    :type K: float
     """
 
     model_name = "rtk-triangle"
@@ -68,12 +71,20 @@ class RTKTriangle(IUnitHydroComponent):
 
     @property
     def base_duration(self) -> float:
-        """Total triangle duration in hours: T * (1 + K)."""
+        """Total triangle duration in hours: T * (1 + K).
+
+        :returns: Base duration ``T * (1 + K)`` [hr].
+        :rtype: float
+        """
         return self.T * (1.0 + self.K)
 
     @property
     def peak_ordinate(self) -> float:
-        """Peak ordinate value 2 / (T * (1 + K)), ensuring unit area."""
+        """Peak ordinate value 2 / (T * (1 + K)), ensuring unit area.
+
+        :returns: Peak ordinate ``2 / (T * (1 + K))`` [1/hr].
+        :rtype: float
+        """
         return 2.0 / (self.T * (1.0 + self.K))
 
     # ------------------------------------------------------------------
@@ -81,7 +92,11 @@ class RTKTriangle(IUnitHydroComponent):
     # ------------------------------------------------------------------
 
     def initialize(self) -> None:
-        """Register R, T, K as scalar parameters and advance to INITIALIZED."""
+        """Register R, T, K as scalar parameters and advance to INITIALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self.register_scalar_parameter(ScalarParameter(
             "R", value=self.R, lower_bound=0.0, upper_bound=1.0,
             units="-", description="Fraction of rainfall excess entering the sewer",
@@ -104,14 +119,25 @@ class RTKTriangle(IUnitHydroComponent):
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:
-        """Validate parameter bounds and advance to VALIDATED."""
+        """Validate parameter bounds and advance to VALIDATED.
+
+        :returns: ``True`` if all parameters are within bounds.
+        :rtype: bool
+        """
         if not self.parameters_valid():
             return False
         self._state = ModelState.VALIDATED
         return True
 
     def prepare(self, data: pd.DataFrame) -> None:
-        """Load rainfall-excess forcing data and infer time step."""
+        """Load rainfall-excess forcing data and infer time step.
+
+        :param data: DataFrame with columns ``datetime`` and ``p_excess_mm``.
+        :type data: pandas.DataFrame
+        :returns: Nothing.
+        :rtype: None
+        :raises ValueError: If required columns are absent.
+        """
         required = {"datetime", "p_excess_mm"}
         missing = required - set(data.columns)
         if missing:
@@ -126,7 +152,12 @@ class RTKTriangle(IUnitHydroComponent):
         self._state = ModelState.PREPARED
 
     def predict(self) -> pd.DataFrame:
-        """Convolve rainfall excess with this triangle's UH kernel and apply R-scaling."""
+        """Convolve rainfall excess with this triangle's UH kernel and apply R-scaling.
+
+        :returns: DataFrame with columns ``datetime`` and ``rdii_mm``.
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
         if self._prepared_df is None:
             raise RuntimeError("Call prepare(data) before predict().")
 
@@ -150,7 +181,11 @@ class RTKTriangle(IUnitHydroComponent):
         return result
 
     def finalize(self) -> None:
-        """Release stored forcing data and advance to FINALIZED."""
+        """Release stored forcing data and advance to FINALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self._prepared_df = None
         self._state = ModelState.FINALIZED
 
@@ -163,6 +198,13 @@ class RTKTriangle(IUnitHydroComponent):
 
         The R-scaling is intentionally **not** applied here; the caller
         (:class:`~sparsehydro.models.rdii.RDIIModel`) applies its own ``R_i`` fraction.
+
+        :param dt_hours: Time-step size [hr].
+        :type dt_hours: float
+        :param n_steps: Number of output steps; defaults to the natural support.
+        :type n_steps: int | None
+        :returns: 1-D array of normalized UH ordinates [1/hr].
+        :rtype: numpy.ndarray
         """
         self._sync_from_params()
         return triangular_uh(self, dt_hours, n_steps)
@@ -172,7 +214,11 @@ class RTKTriangle(IUnitHydroComponent):
     # ------------------------------------------------------------------
 
     def _sync_from_params(self) -> None:
-        """Update instance attributes from the scalar-parameter registry."""
+        """Update instance attributes from the scalar-parameter registry.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self.R = self.get_scalar_parameter("R").value
         self.T = self.get_scalar_parameter("T").value
         self.K = self.get_scalar_parameter("K").value
@@ -186,7 +232,17 @@ class RTKTriangle(IUnitHydroComponent):
 # ---------------------------------------------------------------------------
 
 def _triangle_value(t: float, T: float, K: float) -> float:
-    """Evaluate the triangular UH function at continuous time t."""
+    """Evaluate the triangular UH function at continuous time t.
+
+    :param t: Continuous time [hr].
+    :type t: float
+    :param T: Time to peak [hr].
+    :type T: float
+    :param K: Recession-to-peak ratio.
+    :type K: float
+    :returns: UH ordinate value at time *t* [1/hr].
+    :rtype: float
+    """
     base = T * (1.0 + K)
     peak = 2.0 / base
     if t <= 0.0:
@@ -199,7 +255,19 @@ def _triangle_value(t: float, T: float, K: float) -> float:
 
 
 def _integrate_triangle(t0: float, t1: float, T: float, K: float) -> float:
-    """Integrate the triangular UH exactly over [t0, t1], handling breakpoints."""
+    """Integrate the triangular UH exactly over [t0, t1], handling breakpoints.
+
+    :param t0: Interval start time [hr].
+    :type t0: float
+    :param t1: Interval end time [hr].
+    :type t1: float
+    :param T: Time to peak [hr].
+    :type T: float
+    :param K: Recession-to-peak ratio.
+    :type K: float
+    :returns: Integral of the triangle over ``[t0, t1]``.
+    :rtype: float
+    """
     base = T * (1.0 + K)
     breaks = [t0]
     for bp in (T, base):
@@ -231,9 +299,14 @@ def triangular_uh(
         np.sum(ordinates) * dt_hours ≈ 1.0   (within 1e-10 relative error)
 
     :param triangle: RTK triangle parameters.
+    :type triangle: RTKTriangle
     :param dt_hours: Time-step size [hr].
+    :type dt_hours: float
     :param n_steps: Number of output steps.  Defaults to natural support.
+    :type n_steps: int | None
     :returns: 1-D array of UH ordinates [1/hr].
+    :rtype: numpy.ndarray
+    :raises ValueError: If ``dt_hours <= 0``.
     """
     if dt_hours <= 0.0:
         raise ValueError(f"dt_hours must be > 0; got {dt_hours!r}")
@@ -279,13 +352,22 @@ def default_rtk_params(
     * **R** — ``R_total / (n_models × n_triangles)`` for every triangle.
 
     :param n_models: Number of RDIIModel instances (>= 1).
+    :type n_models: int
     :param n_triangles: RTK triangles per model (>= 1).
+    :type n_triangles: int
     :param T_min: Time-to-peak for the fastest triangle [hr].
+    :type T_min: float
     :param T_max: Time-to-peak for the slowest triangle [hr].
+    :type T_max: float
     :param R_total: Total runoff fraction divided equally across all triangles.
+    :type R_total: float
     :param K_min: Recession ratio for the fastest triangle.
+    :type K_min: float
     :param K_max: Recession ratio for the slowest triangle.
+    :type K_max: float
     :returns: Nested list ``[[( R, T, K), ...], ...]``.
+    :rtype: list[list[tuple[float, float, float]]]
+    :raises ValueError: If any count or bound argument is invalid.
     """
     if n_models < 1:
         raise ValueError(f"n_models must be >= 1; got {n_models!r}")
@@ -359,18 +441,28 @@ class RTKEnsembleModel:
         """Build an additive RTK ensemble.
 
         :param n_models: Number of RDIIModel instances (>= 1).  Defaults to 3.
+        :type n_models: int
         :param n_triangles: RTK triangles inside each RDIIModel (>= 1).  Defaults to 1.
+        :type n_triangles: int
         :param units: Unit system — ``"imperial"`` or ``"metric"``.
+        :type units: str
         :param area_acres: Drainage area shared by all components [acres].
             Frozen and excluded from calibration.
+        :type area_acres: float
         :param ia_defaults: Keyword arguments forwarded to every
             :class:`~sparsehydro.models.rdii.IAModel` constructor.
+        :type ia_defaults: dict | None
         :param rtk_defaults: Nested initial ``(R, T, K)`` values.
             If omitted, :func:`default_rtk_params` is called.
+        :type rtk_defaults: list[list[tuple[float, float, float]]] | None
         :param aliases: Label per component.  Defaults to ``["fast", "medium", "slow"]``
             for n_models=3, else ``["rtk_1", …, "rtk_N"]``.
+        :type aliases: list[str] | None
         :param output_name: Column name for the combined RDII signal.
+        :type output_name: str
         :returns: Fully initialised :class:`~sparsehydro.models.EnsembleModel`.
+        :rtype: EnsembleModel
+        :raises ValueError: If counts or default lengths are inconsistent.
         """
         from .model import RDIIModel
         from ..ensemble import EnsembleModel

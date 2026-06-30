@@ -10,7 +10,7 @@ class ModelState(Enum):
 
         CREATED → INITIALIZED → VALIDATED → PREPARED → PREDICTED → FINALIZED
 
-    Concrete :class:`~sparsehydro.interfaces.IModel` implementations are
+    Concrete :class:`~sparsehydro.models.IModel` implementations are
     responsible for advancing ``_state`` as each lifecycle method completes.
 
     :cvar CREATED: Object has been instantiated; no parameters registered yet.

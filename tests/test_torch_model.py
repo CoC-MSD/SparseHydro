@@ -8,7 +8,7 @@ import pandas as pd
 
 from sparsehydro.enums import ModelState
 from sparsehydro.parameters import ScalarParameter
-from sparsehydro.torch_model import ITorchModel
+from sparsehydro.models.torch_model import ITorchModel
 
 
 class LinearReservoir(ITorchModel):

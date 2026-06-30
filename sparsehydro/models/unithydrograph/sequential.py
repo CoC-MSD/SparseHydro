@@ -31,23 +31,25 @@ from ...events import EventRecord
 class SequentialFitSummary:
     """Results of a sequential unit hydrograph fitting run.
 
-    Attributes
-    ----------
-    events : list[EventRecord]
-        Events that were fitted, in chronological order.
-    calibration_results : list[CalibrationResult]
-        One :class:`~sparsehydro.calibration.CalibrationResult` per event.
+    :ivar events: Events that were fitted, in chronological order.
+    :vartype events: list[EventRecord]
+    :ivar calibration_results: One
+        :class:`~sparsehydro.calibration.CalibrationResult` per event.
         ``pareto_X[0]`` holds fitted parameters;
         ``objective_display_values()[0]`` returns [RMSE, NSE, KGE].
-    global_predicted : pd.DataFrame
-        Full-domain accumulated predicted flow.  Columns: ``datetime``, ``Q_pred``.
-    global_observed : pd.DataFrame
-        Full-domain stormflow.  Columns: ``datetime``, ``stormflow``.
-    model_class_name : str
-        Name of the model class produced by ``model_factory``.
-    fitted_effective_areas : list[float]
-        Fitted effective area per event: ``sum(Q_pred) / sum(rain)`` over the
-        event window.  Parallel to *events* and *calibration_results*.
+    :vartype calibration_results: list[CalibrationResult]
+    :ivar global_predicted: Full-domain accumulated predicted flow.
+        Columns: ``datetime``, ``Q_pred``.
+    :vartype global_predicted: pandas.DataFrame
+    :ivar global_observed: Full-domain stormflow.
+        Columns: ``datetime``, ``stormflow``.
+    :vartype global_observed: pandas.DataFrame
+    :ivar model_class_name: Name of the model class produced by ``model_factory``.
+    :vartype model_class_name: str
+    :ivar fitted_effective_areas: Fitted effective area per event:
+        ``sum(Q_pred) / sum(rain)`` over the event window.  Parallel to
+        *events* and *calibration_results*.
+    :vartype fitted_effective_areas: list[float]
     """
 
     events: list[EventRecord]
@@ -62,6 +64,9 @@ class SequentialFitSummary:
 
         Columns: ``event_id``, ``start_datetime``, ``end_datetime``,
         then one column per calibrated parameter.
+
+        :returns: One row per fitted event with its calibrated parameters.
+        :rtype: pandas.DataFrame
         """
         rows = []
         for event, result in zip(self.events, self.calibration_results):
@@ -78,6 +83,9 @@ class SequentialFitSummary:
         """Return per-event objective values in display form.
 
         Columns: ``event_id``, then one column per objective name.
+
+        :returns: One row per fitted event with display-form objective values.
+        :rtype: pandas.DataFrame
         """
         rows = []
         for event, result in zip(self.events, self.calibration_results):
@@ -95,10 +103,10 @@ class SequentialFitSummary:
         For an ensemble (aliases like ``fast_A``, ``slow_A``) it is the sum of all
         ``*_A`` parameters — consistent with ``mode="sum"`` and fixed weights of 1.0.
 
-        Raises
-        ------
-        ValueError
-            If no ``A``-bearing parameter is found in the calibration result.
+        :returns: Calibrated total ``A`` value per fitted event.
+        :rtype: list[float]
+        :raises ValueError: If no ``A``-bearing parameter is found in a
+            calibration result.
         """
         result: list[float] = []
         for cal in self.calibration_results:
@@ -116,6 +124,9 @@ class SequentialFitSummary:
         """Return observed and fitted effective area per event.
 
         Columns: ``event_id``, ``start_datetime``, ``observed_ae``, ``fitted_ae``.
+
+        :returns: One row per fitted event comparing observed vs fitted area.
+        :rtype: pandas.DataFrame
         """
         rows = [
             {
@@ -132,22 +143,22 @@ class SequentialFitSummary:
 class SequentialFitter:
     """Fit an :class:`~sparsehydro.models.IModel` to storm events one by one.
 
-    Parameters
-    ----------
-    model_factory : callable
-        Zero-argument callable returning a fresh :class:`~sparsehydro.models.IModel`
-        in CREATED state.  Works with single UH models and
-        :class:`~sparsehydro.models.EnsembleModel`::
+    :param model_factory: Zero-argument callable returning a fresh
+        :class:`~sparsehydro.models.IModel` in CREATED state.  Works with single
+        UH models and :class:`~sparsehydro.models.EnsembleModel`::
 
             SequentialFitter(lambda: GammaUH(), data, events)
             SequentialFitter(lambda: make_ensemble(), data, events)
 
-    rain_stormflow : pd.DataFrame
-        Full time series with columns ``datetime``, ``rain``, ``stormflow``.
-    events : list[EventRecord]
-        Events to fit (sorted internally by start_datetime).
-    output_column : str
-        Column name produced by ``model.predict()``.  Default ``"Q_pred"``.
+    :type model_factory: Callable[[], IModel]
+    :param rain_stormflow: Full time series with columns ``datetime``,
+        ``rain``, ``stormflow``.
+    :type rain_stormflow: pandas.DataFrame
+    :param events: Events to fit (sorted internally by ``start_datetime``).
+    :type events: list[EventRecord]
+    :param output_column: Column name produced by ``model.predict()``.
+        Default ``"Q_pred"``.
+    :type output_column: str
     """
 
     def __init__(
@@ -175,20 +186,24 @@ class SequentialFitter:
     ) -> SequentialFitSummary:
         """Run the sequential fitting loop.
 
-        Parameters
-        ----------
-        time_range : (start, end) str tuple, optional
-            Restrict fitting to this date range.
-        objectives : list[IObjective], optional
-            Defaults to ``[RMSE(), NashSutcliffe(), KGE()]``.
-        calibration_objective_index : int
-            Index of *objectives* to minimise (default 0 = RMSE).
-        method : str
-            ``scipy.optimize.minimize`` method, or ``"differential_evolution"``
-            for a global search.
-        smooth_obs : bool
-            Light Savitzky-Golay smooth on observed flow within each event.
-        verbose : bool
+        :param time_range: Restrict fitting to this ``(start, end)`` date range.
+        :type time_range: tuple[str, str] | None
+        :param objectives: Objectives to evaluate; defaults to
+            ``[RMSE(), NashSutcliffe(), KGE()]``.
+        :type objectives: list[IObjective] | None
+        :param calibration_objective_index: Index of *objectives* to minimise
+            (default 0 = RMSE).
+        :type calibration_objective_index: int
+        :param method: ``scipy.optimize.minimize`` method, or
+            ``"differential_evolution"`` for a global search.
+        :type method: str
+        :param smooth_obs: Apply a light Savitzky-Golay smooth to observed flow
+            within each event.
+        :type smooth_obs: bool
+        :param verbose: Print per-event progress.
+        :type verbose: bool
+        :returns: Summary of the sequential fitting run.
+        :rtype: SequentialFitSummary
         """
         if objectives is None:
             objectives = [RMSE(), NashSutcliffe(), KGE()]
@@ -329,6 +344,24 @@ class SequentialFitter:
         )
 
     def _optimise(self, problem, x0, xl, xu, method, obj_idx):
+        """Minimise a single objective of *problem* from start point *x0*.
+
+        :param problem: Calibration problem exposing ``evaluate``.
+        :type problem: CalibrationProblem
+        :param x0: Initial parameter vector.
+        :type x0: numpy.ndarray
+        :param xl: Lower parameter bounds.
+        :type xl: numpy.ndarray
+        :param xu: Upper parameter bounds.
+        :type xu: numpy.ndarray
+        :param method: ``scipy.optimize.minimize`` method or
+            ``"differential_evolution"``.
+        :type method: str
+        :param obj_idx: Index of the objective to minimise.
+        :type obj_idx: int
+        :returns: Tuple ``(best_x, success)``.
+        :rtype: tuple[numpy.ndarray, bool]
+        """
         bounds_list = list(zip(xl.tolist(), xu.tolist()))
 
         def scalar_fn(x):
@@ -348,6 +381,13 @@ class SequentialFitter:
             return x0.copy(), False
 
     def _filter_data(self, time_range):
+        """Return the forcing data optionally restricted to *time_range*.
+
+        :param time_range: ``(start, end)`` date range, or ``None`` for all data.
+        :type time_range: tuple[str, str] | None
+        :returns: Filtered forcing DataFrame with a reset index.
+        :rtype: pandas.DataFrame
+        """
         data = self._data.copy()
         if time_range is not None:
             s, e = pd.to_datetime(time_range[0]), pd.to_datetime(time_range[1])
@@ -355,6 +395,13 @@ class SequentialFitter:
         return data.reset_index(drop=True)
 
     def _filter_events(self, time_range):
+        """Return the events optionally restricted to *time_range*.
+
+        :param time_range: ``(start, end)`` date range, or ``None`` for all events.
+        :type time_range: tuple[str, str] | None
+        :returns: Events fully contained within the range.
+        :rtype: list[EventRecord]
+        """
         evts = self._events
         if time_range is not None:
             s, e = pd.to_datetime(time_range[0]), pd.to_datetime(time_range[1])

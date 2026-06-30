@@ -29,6 +29,13 @@ _MAX_STEPS = 864  # 72 h at 5-min intervals
 
 
 def _infer_dt_hours(data: pd.DataFrame) -> float:
+    """Infer the time-step size from the ``datetime`` column.
+
+    :param data: DataFrame containing a ``datetime`` column.
+    :type data: pandas.DataFrame
+    :returns: Median time-step size [hr]; ``1/12`` (5 min) for < 2 rows.
+    :rtype: float
+    """
     if len(data) < 2:
         return 1.0 / 12.0
     dt = data["datetime"].diff().median()
@@ -36,7 +43,15 @@ def _infer_dt_hours(data: pd.DataFrame) -> float:
 
 
 def _normalize_kernel(raw: np.ndarray, dt_hours: float) -> np.ndarray:
-    """Normalise so ``sum(result) * dt_hours ≈ 1.0``."""
+    """Normalise so ``sum(result) * dt_hours ≈ 1.0``.
+
+    :param raw: Unnormalised kernel ordinates.
+    :type raw: numpy.ndarray
+    :param dt_hours: Time-step size [hr].
+    :type dt_hours: float
+    :returns: Normalised kernel [1/hr]; all zeros if the raw sum is non-positive.
+    :rtype: numpy.ndarray
+    """
     total = float(np.sum(raw))
     if total <= 0.0:
         return np.zeros_like(raw)
@@ -44,6 +59,15 @@ def _normalize_kernel(raw: np.ndarray, dt_hours: float) -> np.ndarray:
 
 
 def _trim_pad(arr: np.ndarray, n_steps: int | None) -> np.ndarray:
+    """Trim or zero-pad *arr* to exactly *n_steps* elements.
+
+    :param arr: Input array.
+    :type arr: numpy.ndarray
+    :param n_steps: Target length, or ``None`` to leave *arr* unchanged.
+    :type n_steps: int | None
+    :returns: Array of length *n_steps* (or *arr* unchanged when *n_steps* is ``None``).
+    :rtype: numpy.ndarray
+    """
     if n_steps is None:
         return arr
     if len(arr) >= n_steps:
@@ -60,14 +84,12 @@ class GammaUH(IUnitHydroComponent):
 
     Shape: ``f(t) ∝ (t/tp)^tt * exp(-t/tp)``
 
-    Parameters
-    ----------
-    A : float
-        Effective area ratio (stormflow / rain volume).  Bounds [0, 1e4].
-    tt : float
-        Shape parameter (dimensionless).  Bounds [0.01, 50].
-    tp : float
-        Scale / time-to-peak in time steps.  Bounds [0.01, 500].
+    :param A: Effective area ratio (stormflow / rain volume).  Bounds [0, 1e4].
+    :type A: float
+    :param tt: Shape parameter (dimensionless).  Bounds [0.01, 50].
+    :type tt: float
+    :param tp: Scale / time-to-peak in time steps.  Bounds [0.01, 500].
+    :type tp: float
     """
 
     model_name: ClassVar[str] = "gamma-uh"
@@ -81,6 +103,11 @@ class GammaUH(IUnitHydroComponent):
         self._data: pd.DataFrame | None = None
 
     def initialize(self) -> None:
+        """Register the A, tt, tp scalar parameters and advance to INITIALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self._scalars: dict = {}
         self._vectors: dict = {}
         self._constraints: list = []
@@ -90,17 +117,35 @@ class GammaUH(IUnitHydroComponent):
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:
+        """Validate parameter bounds and advance to VALIDATED.
+
+        :returns: ``True`` if all parameters are within bounds.
+        :rtype: bool
+        """
         ok = self.parameters_valid()
         if ok:
             self._state = ModelState.VALIDATED
         return ok
 
     def prepare(self, data: pd.DataFrame) -> None:
+        """Cache forcing data and coerce the ``datetime`` column.
+
+        :param data: DataFrame with ``datetime`` and ``rain`` columns.
+        :type data: pandas.DataFrame
+        :returns: Nothing.
+        :rtype: None
+        """
         self._data = data.copy()
         self._data["datetime"] = pd.to_datetime(self._data["datetime"])
         self._state = ModelState.PREPARED
 
     def predict(self) -> pd.DataFrame:
+        """Convolve rainfall with the gamma UH kernel and return predicted flow.
+
+        :returns: DataFrame with columns ``datetime`` and ``Q_pred``.
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
         if self._data is None:
             raise RuntimeError("Call prepare() before predict().")
         A = self.get_scalar_parameter("A").value
@@ -112,10 +157,24 @@ class GammaUH(IUnitHydroComponent):
         return pd.DataFrame({"datetime": self._data["datetime"].values, "Q_pred": Q})
 
     def finalize(self) -> None:
+        """Release cached forcing data and advance to FINALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self._data = None
         self._state = ModelState.FINALIZED
 
     def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
+        """Return the normalized gamma UH ordinate array.
+
+        :param dt_hours: Time-step size [hr].
+        :type dt_hours: float
+        :param n_steps: Number of output steps; defaults to the natural support.
+        :type n_steps: int | None
+        :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
+        :rtype: numpy.ndarray
+        """
         tt = self.get_scalar_parameter("tt").value
         tp = max(self.get_scalar_parameter("tp").value, 1e-6)
         max_steps = max(int(5 * tp + 1), 20)
@@ -133,14 +192,12 @@ class NashUH(IUnitHydroComponent):
 
     Shape: ``f(t) ∝ t^(n-1) * exp(-t/k)``
 
-    Parameters
-    ----------
-    A : float
-        Effective area ratio.  Bounds [0, 1e4].
-    n : float
-        Number of linear reservoirs.  Bounds [0.01, 100].
-    k : float
-        Storage coefficient in time steps.  Bounds [0.01, 500].
+    :param A: Effective area ratio.  Bounds [0, 1e4].
+    :type A: float
+    :param n: Number of linear reservoirs.  Bounds [0.01, 100].
+    :type n: float
+    :param k: Storage coefficient in time steps.  Bounds [0.01, 500].
+    :type k: float
     """
 
     model_name: ClassVar[str] = "nash-uh"
@@ -154,6 +211,11 @@ class NashUH(IUnitHydroComponent):
         self._data: pd.DataFrame | None = None
 
     def initialize(self) -> None:
+        """Register the A, n, k scalar parameters and advance to INITIALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self._scalars = {}
         self._vectors = {}
         self._constraints = []
@@ -163,17 +225,35 @@ class NashUH(IUnitHydroComponent):
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:
+        """Validate parameter bounds and advance to VALIDATED.
+
+        :returns: ``True`` if all parameters are within bounds.
+        :rtype: bool
+        """
         ok = self.parameters_valid()
         if ok:
             self._state = ModelState.VALIDATED
         return ok
 
     def prepare(self, data: pd.DataFrame) -> None:
+        """Cache forcing data and coerce the ``datetime`` column.
+
+        :param data: DataFrame with ``datetime`` and ``rain`` columns.
+        :type data: pandas.DataFrame
+        :returns: Nothing.
+        :rtype: None
+        """
         self._data = data.copy()
         self._data["datetime"] = pd.to_datetime(self._data["datetime"])
         self._state = ModelState.PREPARED
 
     def predict(self) -> pd.DataFrame:
+        """Convolve rainfall with the Nash cascade kernel and return predicted flow.
+
+        :returns: DataFrame with columns ``datetime`` and ``Q_pred``.
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
         if self._data is None:
             raise RuntimeError("Call prepare() before predict().")
         A = self.get_scalar_parameter("A").value
@@ -185,10 +265,24 @@ class NashUH(IUnitHydroComponent):
         return pd.DataFrame({"datetime": self._data["datetime"].values, "Q_pred": Q})
 
     def finalize(self) -> None:
+        """Release cached forcing data and advance to FINALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self._data = None
         self._state = ModelState.FINALIZED
 
     def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
+        """Return the normalized Nash cascade UH ordinate array.
+
+        :param dt_hours: Time-step size [hr].
+        :type dt_hours: float
+        :param n_steps: Number of output steps; defaults to the natural support.
+        :type n_steps: int | None
+        :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
+        :rtype: numpy.ndarray
+        """
         n_val = max(self.get_scalar_parameter("n").value, 1e-6)
         k_val = max(self.get_scalar_parameter("k").value, 1e-6)
         max_steps = max(int(5 * n_val * k_val + 1), 20)
@@ -208,14 +302,12 @@ class TriangleUH(IUnitHydroComponent):
 
     Rising limb 0 → peak at ``tp``; falling limb peak → 0 at ``tt``.
 
-    Parameters
-    ----------
-    A : float
-        Effective area ratio.  Bounds [0, 1e4].
-    tt : float
-        Total UH duration in time steps.  Bounds [5, 1000].
-    tp : float
-        Time to peak in time steps.  Bounds [2, 500].  Must be < tt.
+    :param A: Effective area ratio.  Bounds [0, 1e4].
+    :type A: float
+    :param tt: Total UH duration in time steps.  Bounds [5, 1000].
+    :type tt: float
+    :param tp: Time to peak in time steps.  Bounds [2, 500].  Must be < tt.
+    :type tp: float
     """
 
     model_name: ClassVar[str] = "triangle-uh"
@@ -229,6 +321,11 @@ class TriangleUH(IUnitHydroComponent):
         self._data: pd.DataFrame | None = None
 
     def initialize(self) -> None:
+        """Register the A, tt, tp scalar parameters and advance to INITIALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self._scalars = {}
         self._vectors = {}
         self._constraints = []
@@ -238,6 +335,11 @@ class TriangleUH(IUnitHydroComponent):
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:
+        """Validate parameter bounds and the ``tp < tt`` ordering constraint.
+
+        :returns: ``True`` if all parameters are within bounds and ``tp < tt``.
+        :rtype: bool
+        """
         ok = self.parameters_valid()
         if ok and self.get_scalar_parameter("tp").value >= self.get_scalar_parameter("tt").value:
             ok = False
@@ -246,11 +348,24 @@ class TriangleUH(IUnitHydroComponent):
         return ok
 
     def prepare(self, data: pd.DataFrame) -> None:
+        """Cache forcing data and coerce the ``datetime`` column.
+
+        :param data: DataFrame with ``datetime`` and ``rain`` columns.
+        :type data: pandas.DataFrame
+        :returns: Nothing.
+        :rtype: None
+        """
         self._data = data.copy()
         self._data["datetime"] = pd.to_datetime(self._data["datetime"])
         self._state = ModelState.PREPARED
 
     def predict(self) -> pd.DataFrame:
+        """Convolve rainfall with the triangular UH kernel and return predicted flow.
+
+        :returns: DataFrame with columns ``datetime`` and ``Q_pred``.
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
         if self._data is None:
             raise RuntimeError("Call prepare() before predict().")
         A = self.get_scalar_parameter("A").value
@@ -262,10 +377,24 @@ class TriangleUH(IUnitHydroComponent):
         return pd.DataFrame({"datetime": self._data["datetime"].values, "Q_pred": Q})
 
     def finalize(self) -> None:
+        """Release cached forcing data and advance to FINALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self._data = None
         self._state = ModelState.FINALIZED
 
     def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
+        """Return the normalized triangular UH ordinate array.
+
+        :param dt_hours: Time-step size [hr].
+        :type dt_hours: float
+        :param n_steps: Number of output steps; defaults to the natural support.
+        :type n_steps: int | None
+        :returns: Normalized UH ordinates [1/hr]; all zeros when ``tp >= tt``.
+        :rtype: numpy.ndarray
+        """
         tt_val = self.get_scalar_parameter("tt").value
         tp_val = self.get_scalar_parameter("tp").value
         if tp_val >= tt_val:

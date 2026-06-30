@@ -38,13 +38,19 @@ try:
 
         :param method: ``"differential_evolution"`` (default) or any
             ``scipy.optimize.minimize`` method string (e.g. ``"L-BFGS-B"``).
+        :type method: str
         :param objective_index: Zero-based index of the objective to optimise
             when the problem has multiple objectives.
+        :type objective_index: int
         :param maxiter: Maximum number of iterations / generations.
+        :type maxiter: int
         :param seed: Random seed (used by ``differential_evolution``).
+        :type seed: int or None
         :param verbose: Print solver progress.
+        :type verbose: bool
         :param kwargs: Additional keyword arguments forwarded to the underlying
             SciPy function.
+        :type kwargs: Any
         """
 
         def __init__(
@@ -71,6 +77,7 @@ try:
             found for the selected objective.
 
             :param problem: Calibration problem wrapping model + data + objectives.
+            :type problem: CalibrationProblem
             :param kwargs: Per-call overrides: ``method``, ``objective_index``,
                 ``maxiter``, ``seed``, ``verbose``.
             :returns: Result with the single best solution.

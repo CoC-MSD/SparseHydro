@@ -7,7 +7,7 @@ are specified through a single ``column_map`` dictionary.  Values can be either 
 **DataFrame workflow** (most common)::
 
     from sparsehydro.calibration import CalibrationProblem, NashSutcliffe, PeakWeightedMSE
-    from sparsehydro.rdii import RDIIModel
+    from sparsehydro.models.rdii import RDIIModel
 
     model = RDIIModel(n_triangles=3)
     model.initialize()
@@ -54,10 +54,10 @@ import pandas as pd
 from .objectives import IObjective
 
 if TYPE_CHECKING:
-    from ..interfaces import IModel
+    from ..models import IModel
 
 # Reserved keys in column_map that specify calibration roles, not column renames.
-_ROLE_KEYS = frozenset({"observed", "predicted"})
+_ROLE_KEYS = frozenset({"observed", "predicted", "mask"})
 
 
 def _resolve_extractor(
@@ -67,8 +67,13 @@ def _resolve_extractor(
     """Return a callable extractor from a column_map value.
 
     :param mapping_value: Column name (str) or callable, or None.
+    :type mapping_value: str or Callable or None
     :param role: Role name for error messages (``"observed"`` / ``"predicted"``).
+    :type role: str
     :returns: Callable ``(data) → np.ndarray``.
+    :rtype: Callable
+    :raises ValueError: If *mapping_value* is ``None``.
+    :raises TypeError: If *mapping_value* is neither a string nor callable.
     """
     if mapping_value is None:
         raise ValueError(
@@ -90,8 +95,41 @@ def _resolve_extractor(
     )
 
 
+def _resolve_mask(
+    spec: Union[str, Callable, np.ndarray, None],
+    prepared_data: Any,
+    length: int,
+) -> np.ndarray | None:
+    """Resolve a mask specification into a boolean array.
+
+    :param spec: ``None``, a boolean ``np.ndarray``, a column-name string, or a
+        callable ``(prepared_data) -> array-like``.
+    :type spec: str or Callable or numpy.ndarray or None
+    :param prepared_data: Prepared data used to resolve string/callable specs.
+    :type prepared_data: Any
+    :param length: Expected mask length (matches the observed array).
+    :type length: int
+    :returns: Boolean array of length *length*, or ``None`` if *spec* is ``None``.
+    :rtype: numpy.ndarray or None
+    :raises ValueError: If the resolved mask length does not match *length*.
+    """
+    if spec is None:
+        return None
+    if isinstance(spec, np.ndarray):
+        arr = spec
+    else:
+        extractor = _resolve_extractor(spec, "mask")
+        arr = extractor(prepared_data)
+    mask = np.asarray(arr, dtype=bool)
+    if mask.shape != (length,):
+        raise ValueError(
+            f"mask length {mask.shape} does not match observed length ({length},)."
+        )
+    return mask
+
+
 class CalibrationProblem:
-    """Solver-agnostic calibration problem for any :class:`~sparsehydro.interfaces.IModel`.
+    """Solver-agnostic calibration problem for any :class:`~sparsehydro.models.IModel`.
 
     Bundles a model with input data, preprocessing, observed targets, and objectives.
     The same problem instance can be passed to any
@@ -108,16 +146,39 @@ class CalibrationProblem:
 
     :param model: Model in at least VALIDATED state.  Prepared automatically when
         ``data`` is supplied.
+    :type model: IModel
     :param data: Input data (any type).  Passed through the preprocessing pipeline
         and then to ``model.prepare()``.  May be ``None`` if the model is already
         in PREPARED state, but then ``column_map["observed"]`` must be a callable
         that does not require the prepared data (e.g. a closure).
+    :type data: Any
     :param objectives: At least one objective.
+    :type objectives: list[IObjective]
     :param column_map: Unified mapping dict (see above).
+    :type column_map: dict[str, Any] or None
     :param prepare_fn: ``(data, **prepare_kwargs) → prepared_data`` callable for
         complex preprocessing.  Mutually exclusive with non-reserved ``column_map``
         rename entries.
+    :type prepare_fn: Callable or None
+    :param mask: Problem-level default mask restricting every objective to a
+        subset of timesteps.  May be a boolean ``np.ndarray``, a column-name
+        string, or a callable ``(prepared_data) -> array-like`` — resolved like
+        ``observed``/``predicted``.  Equivalent to ``column_map["mask"]`` (the
+        explicit argument wins if both are given).  Individual objectives that
+        carry their own ``mask`` override this default.  Positions where
+        observed or predicted is ``NaN`` are always excluded regardless.
+    :type mask: str or Callable or numpy.ndarray or None
     :param prepare_kwargs: Extra keyword arguments forwarded to ``prepare_fn``.
+    :type prepare_kwargs: Any
+
+    **Masking**::
+
+        problem = CalibrationProblem(
+            model=model, data=df,
+            objectives=[NashSutcliffe(), VolumeRelativeError()],
+            column_map={"observed": "stormflow", "predicted": "rdii_cfs",
+                        "mask": "is_storm"},   # bool column in prepared data
+        )
     """
 
     def __init__(
@@ -127,6 +188,7 @@ class CalibrationProblem:
         objectives: list[IObjective] | None = None,
         column_map: "dict[str, Any] | None" = None,
         prepare_fn: Callable | None = None,
+        mask: "str | Callable | np.ndarray | None" = None,
         **prepare_kwargs: Any,
     ) -> None:
         if objectives is None or len(objectives) == 0:
@@ -184,6 +246,24 @@ class CalibrationProblem:
                 f"Failed to extract observed values from data using "
                 f"column_map['observed']={cmap.get('observed')!r}: {exc}"
             ) from exc
+
+        # ------------------------------------------------------------------
+        # Resolve masks (problem-level default + per-objective overrides)
+        # ------------------------------------------------------------------
+        n_obs = int(self._observed.shape[0])
+        mask_spec = mask if mask is not None else cmap.get("mask")
+        try:
+            self._mask: np.ndarray | None = _resolve_mask(
+                mask_spec, prepared_data, n_obs
+            )
+        except Exception as exc:
+            raise ValueError(
+                f"Failed to resolve problem-level mask {mask_spec!r}: {exc}"
+            ) from exc
+
+        self._objective_masks: list[np.ndarray | None] = [
+            _resolve_mask(obj.mask, prepared_data, n_obs) for obj in self._objectives
+        ]
 
         # ------------------------------------------------------------------
         # Parameter registry snapshot (calibrate=True only)
@@ -287,8 +367,11 @@ class CalibrationProblem:
         parameters (``calibrate=False``) retain their current values.
 
         :param x: Parameter vector of length :attr:`n_params` (calibratable only).
+        :type x: numpy.ndarray
         :param penalty_weight: Multiplier for the squared-penalty term (default 1e6).
+        :type penalty_weight: float
         :returns: 1-D array of length :attr:`n_objectives` in minimisation form.
+        :rtype: numpy.ndarray
         """
         for name, val in zip(self._param_names, x):
             self._model.get_scalar_parameter(name).value = float(val)
@@ -298,8 +381,11 @@ class CalibrationProblem:
 
         F = np.empty(len(self._objectives), dtype=float)
         for i, obj in enumerate(self._objectives):
+            eff = self._objective_masks[i]
+            if eff is None:
+                eff = self._mask
             try:
-                val = obj.evaluate(self._observed, predicted)
+                val = obj.compute(self._observed, predicted, mask=eff)
             except Exception:
                 val = 1e12 if obj.minimize else -1e12
             F[i] = val if obj.minimize else -val
@@ -328,6 +414,10 @@ class CalibrationProblem:
         cp._model = copy.deepcopy(self._model)
         cp._observed = self._observed.copy()
         cp._objectives = list(self._objectives)
+        cp._mask = None if self._mask is None else self._mask.copy()
+        cp._objective_masks = [
+            None if m is None else m.copy() for m in self._objective_masks
+        ]
         cp._result_extractor = self._result_extractor
         cp._column_map = self._column_map
         cp._prepare_fn = self._prepare_fn

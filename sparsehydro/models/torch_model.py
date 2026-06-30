@@ -86,10 +86,33 @@ try:
 
         @abstractmethod
         def forward(self, *args: Any, **kwargs: Any) -> "torch.Tensor":
-            """Differentiable forward pass."""
+            """Differentiable forward pass producing the model output.
+
+            Subclasses implement the model computation using torch operations
+            so that gradients flow back to the registered ``torch.nn.Parameter``
+            attributes.
+
+            :param args: Positional forcing inputs (e.g. a rainfall tensor).
+            :type args: Any
+            :param kwargs: Keyword forcing inputs.
+            :type kwargs: Any
+            :returns: The model output tensor with gradient tracking enabled.
+            :rtype: torch.Tensor
+            """
 
         def predict(self, *args: Any, **kwargs: Any) -> "torch.Tensor":
-            """Run the differentiable forward pass and return the output tensor."""
+            """Run the differentiable forward pass and advance model state.
+
+            Delegates to :meth:`forward` and sets the model state to
+            :attr:`~sparsehydro.enums.ModelState.PREDICTED`.
+
+            :param args: Positional forcing inputs forwarded to :meth:`forward`.
+            :type args: Any
+            :param kwargs: Keyword forcing inputs forwarded to :meth:`forward`.
+            :type kwargs: Any
+            :returns: The output tensor returned by :meth:`forward`.
+            :rtype: torch.Tensor
+            """
             result = self.forward(*args, **kwargs)
             self._state = ModelState.PREDICTED
             return result

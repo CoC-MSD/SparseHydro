@@ -42,7 +42,7 @@ from sparsehydro.calibration.objectives import (
 )
 from sparsehydro.calibration.result import _identify_pareto
 from sparsehydro.enums import ModelState
-from sparsehydro.interfaces import IModel
+from sparsehydro.models import IModel
 from sparsehydro.parameters import ScalarParameter
 
 # ---------------------------------------------------------------------------

@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 from ..enums import ModelState
-from ..interfaces import IModel
+from ..models import IModel
 
 if TYPE_CHECKING:
     from ..calibration.result import CalibrationResult
@@ -50,14 +50,19 @@ try:
         and shares the X-axis with the flow subplot.
 
         :param datetime: Time axis values (array-like of dates or timestamps).
+        :type datetime: array-like
         :param rainfall_mm: Rainfall depth per time step [mm].
         :type rainfall_mm: numpy.ndarray
         :param observed_flow: Observed flow values, or ``None`` to omit.
+        :type observed_flow: array-like or None
         :param predicted_flow: Model-predicted output [same units as observed].
         :type predicted_flow: numpy.ndarray
         :param title: Figure title.
+        :type title: str
         :param rainfall_label: Y-axis label for the rainfall panel.
+        :type rainfall_label: str
         :param flow_label: Y-axis label for the flow panel.
+        :type flow_label: str
         :returns: Plotly Figure with 2 rows, shared X-axis.
         :rtype: plotly.graph_objects.Figure
         """
@@ -139,12 +144,15 @@ try:
         systematic bias structure.
 
         :param datetime: Time axis for the residual bar chart.
+        :type datetime: array-like
         :param observed: Observed values.
         :type observed: numpy.ndarray
         :param predicted: Predicted values.
         :type predicted: numpy.ndarray
         :param title: Figure title.
+        :type title: str
         :param flow_label: Axis label used for observed / predicted axes.
+        :type flow_label: str
         :returns: Plotly Figure with 3 rows.
         :rtype: plotly.graph_objects.Figure
         """
@@ -276,12 +284,15 @@ try:
         zero-reference line.
 
         :param datetime: Time axis values.
+        :type datetime: array-like
         :param observed: Observed values.
         :type observed: numpy.ndarray
         :param predicted: Predicted values.
         :type predicted: numpy.ndarray
         :param title: Figure title.
+        :type title: str
         :param flow_label: Units label for volume axis.
+        :type flow_label: str
         :returns: Plotly Figure with 2 rows.
         :rtype: plotly.graph_objects.Figure
         """
@@ -357,11 +368,11 @@ try:
     # ======================================================================
 
     class VisualizationModel(IModel):
-        """General-purpose visualization model for any :class:`~sparsehydro.interfaces.IModel` output.
+        """General-purpose visualization model for any :class:`~sparsehydro.models.IModel` output.
 
         Wraps :func:`plot_timeseries`, :func:`plot_pareto_evolution`, and
         :func:`plot_parallel_coordinates` behind the standard
-        :class:`~sparsehydro.interfaces.IModel` lifecycle.
+        :class:`~sparsehydro.models.IModel` lifecycle.
 
         Column names for the input DataFrame are specified at :meth:`prepare`
         time, making this model compatible with any model's output format.
@@ -375,8 +386,11 @@ try:
             viz.parallel_figure      # generated when calibration_result is supplied
 
         :param title: Base title used across all figures.
+        :type title: str
         :param rainfall_label: Y-axis label for the rainfall panel.
+        :type rainfall_label: str
         :param flow_label: Y-axis label for the flow panel.
+        :type flow_label: str
         """
 
         model_name = "visualization"
@@ -425,12 +439,18 @@ try:
             """Load model output data and configure column mapping.
 
             :param data: Any model's output DataFrame.
+            :type data: pandas.DataFrame
             :param datetime_col: Column name for the time axis.
+            :type datetime_col: str
             :param predicted_col: Column name for the predicted output signal.
+            :type predicted_col: str
             :param observed_col: Column name for observed data, or ``None`` to omit.
+            :type observed_col: str or None
             :param rainfall_col: Column name for rainfall forcing, or ``None`` to omit.
+            :type rainfall_col: str or None
             :param calibration_result: When provided, :meth:`predict` also
                 generates Pareto-evolution and parallel-coordinates figures.
+            :type calibration_result: CalibrationResult or None
             :raises ValueError: If required columns are absent.
             """
             missing = [c for c in (datetime_col, predicted_col) if c not in data.columns]
@@ -560,20 +580,34 @@ try:
 
         :param datetime: 1-D datetime-like array aligned with *observed* /
             *predicted*.
+        :type datetime: array-like
         :param observed: 1-D array of observed values.
+        :type observed: numpy.ndarray
         :param predicted: 1-D array of predicted values (best solution).
+        :type predicted: numpy.ndarray
         :param exogenous: ``{label: (values_array, units_string)}`` mapping.
             All traces are normalised to [0, 1] on a shared y-axis.  Rainfall-like
             traces (label contains "rain" / "precip") are plotted as bars.
+        :type exogenous: dict[str, tuple[numpy.ndarray, str]] or None
         :param pareto_predictions: Array of shape ``(n_solutions, n_timesteps)``
             containing all Pareto-front predictions.  Used for the IQR band and
             scatter box-whiskers.
+        :type pareto_predictions: numpy.ndarray or None
         :param confidence_percentiles: ``(lower_pct, upper_pct)`` for the IQR band.
+        :type confidence_percentiles: tuple
         :param tolerance_angles: Angles in degrees from the 45° line.  For each
             ``θ`` two lines are drawn at slopes ``tan(45° ± θ)``.
+        :type tolerance_angles: list[float] or None
         :param rainfall_label: String to match when auto-detecting rainfall traces.
+        :type rainfall_label: str
+        :param observed_label: Legend label for the observed trace.
+        :type observed_label: str
+        :param predicted_label: Legend label for the predicted trace.
+        :type predicted_label: str
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure.
+        :rtype: plotly.graph_objects.Figure
         """
         import math
 
@@ -788,19 +822,27 @@ try:
 
         :param df: Input DataFrame containing a datetime column and at least one
             numeric variable column.
+        :type df: pandas.DataFrame
         :param event_id_col: Column name that identifies individual events.
+        :type event_id_col: str
         :param datetime_col: Column name for the datetime axis.
+        :type datetime_col: str
         :param train_event_ids: Iterable of event IDs to shade as training data
             (blue, ``rgba(0,120,215,0.10)``).
+        :type train_event_ids: collections.abc.Iterable or None
         :param val_event_ids: Iterable of event IDs to shade as validation data
             (orange, ``rgba(230,115,0,0.10)``).
+        :type val_event_ids: collections.abc.Iterable or None
         :param variables: ``{col_name: (axis_label, units)}`` mapping describing
             which columns to plot and how to label them.  When ``None`` all
             numeric columns (excluding *event_id_col* and *datetime_col*) are
             included with their column names as labels.
+        :type variables: dict[str, tuple[str, str]] or None
         :param rainfall_cols: Column names that should be rendered as inverted
             bar charts (rainfall-style).
+        :type rainfall_cols: collections.abc.Iterable[str] or None
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure with *N* rows (one per variable), shared X-axis.
         :rtype: plotly.graph_objects.Figure
         """
@@ -955,17 +997,26 @@ try:
         component's individual contribution.
 
         :param datetime: Time axis aligned with *observed*.
+        :type datetime: array-like
         :param rainfall_mm: Rainfall depth array, or ``None`` to skip the top
             panel.
+        :type rainfall_mm: numpy.ndarray or None
         :param observed: 1-D array of observed flow values.
-        :param pred_df: Output of :meth:`~sparsehydro.ensemble.EnsembleModel.predict`
+        :type observed: numpy.ndarray
+        :param pred_df: Output of :meth:`~sparsehydro.models.EnsembleModel.predict`
             containing ``{alias}_output`` columns and the *output_name* column.
+        :type pred_df: pandas.DataFrame
         :param aliases: List of alias strings matching the EnsembleModel's
             ``aliases`` attribute (e.g. ``["rdii", "sanitary"]``).
+        :type aliases: list[str]
         :param output_name: Column name for the combined output in *pred_df*.
+        :type output_name: str
         :param observed_label: Legend label for the observed trace.
+        :type observed_label: str
         :param rainfall_label: Y-axis label and legend label for rainfall.
+        :type rainfall_label: str
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure with 1–2 rows.
         :rtype: plotly.graph_objects.Figure
         """
@@ -1094,25 +1145,38 @@ try:
           repeated here to show each contribution in context.
 
         :param datetime: 1-D time axis aligned with *observed*.
+        :type datetime: array-like
         :param rainfall: Rainfall array, or ``None`` to omit the top panel.
+        :type rainfall: numpy.ndarray or None
         :param observed: 1-D observed flow array.
+        :type observed: numpy.ndarray
         :param pred_df: Output of
-            :meth:`~sparsehydro.ensemble.EnsembleModel.predict`, containing
+            :meth:`~sparsehydro.models.EnsembleModel.predict`, containing
             ``{alias}_output`` columns and *output_name*.
+        :type pred_df: pandas.DataFrame
         :param aliases: List of alias strings (e.g. ``["rdii", "seas"]``).
+        :type aliases: list[str]
         :param output_name: Column name for the combined output in *pred_df*.
+        :type output_name: str
         :param pareto_predictions: Array of shape ``(n_solutions, n_timesteps)``
             of combined-output predictions for all Pareto-front solutions.
             Produced by
-            :meth:`~sparsehydro.ensemble.EnsembleModel.collect_pareto_predictions`.
+            :meth:`~sparsehydro.models.EnsembleModel.collect_pareto_predictions`.
             When supplied, a shaded band is drawn in Row 3.
+        :type pareto_predictions: numpy.ndarray or None
         :param confidence_percentiles: ``(lower_pct, upper_pct)`` for the band.
+        :type confidence_percentiles: tuple
         :param component_labels: ``{alias: display_label}`` overrides.  Missing
             aliases default to the alias string (title-cased).
+        :type component_labels: dict or None
         :param observed_label: Legend label for the observed trace.
+        :type observed_label: str
         :param rainfall_label: Rainfall panel label.
+        :type rainfall_label: str
         :param flow_label: Y-axis label for component and combined panels.
+        :type flow_label: str
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure with 2–3 rows, shared X-axis.
         :rtype: plotly.graph_objects.Figure
         """

@@ -20,6 +20,15 @@ if TYPE_CHECKING:
 
 
 def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    """Convert a ``#rrggbb`` hex colour to an ``rgba(...)`` string.
+
+    :param hex_color: Hex colour string (e.g. ``"#1f77b4"``).
+    :type hex_color: str
+    :param alpha: Alpha (opacity) value in ``[0, 1]``.
+    :type alpha: float
+    :returns: CSS ``rgba(...)`` colour string.
+    :rtype: str
+    """
     h = hex_color.lstrip("#")
     r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
@@ -49,11 +58,13 @@ try:
         Useful for sanity-checking T (time-to-peak) and K (recession ratio)
         before calibration.
 
-        :param triangles: An :class:`~sparsehydro.rdii.RTKTriangle` instance or
+        :param triangles: An :class:`~sparsehydro.models.rdii.RTKTriangle` instance or
             a list/tuple of instances.
+        :type triangles: RTKTriangle or list[RTKTriangle] or tuple[RTKTriangle, ...]
         :param dt_hours: Time step in hours.
         :type dt_hours: float
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure — one filled trace per triangle.
         :rtype: plotly.graph_objects.Figure
         """
@@ -111,7 +122,9 @@ try:
             ``rdii_component_N`` columns.
         :type result_df: pandas.DataFrame
         :param title: Figure title.
+        :type title: str
         :param rainfall_label: Y-axis label for the rainfall panel.
+        :type rainfall_label: str
         :returns: Plotly Figure with 2 rows (rainfall + stacked components) when
             rainfall is available, or 1 row otherwise.
         :rtype: plotly.graph_objects.Figure

@@ -11,14 +11,19 @@ license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
     { name = "Caleb Buahin", email = "cbuahin@hazenandsawyer.com" },
-    { name = "John Barton", email = "john.barton@cincinnati-oh.gov" },
-    { name = "Filipe Romero", email = "felipe.romero@cincinnati-oh.gov" },
     { name = "Trent Schade", email = "trent.schade@cincinnati-oh.gov" },
+    { name = "John Barton", email = "john.barton@cincinnati-oh.gov" },
 ]
 maintainers = [
     { name = "Caleb Buahin", email = "cbuahin@hazenandsawyer.com" },
     { name = "Trent Schade", email = "trent.schade@cincinnati-oh.gov" },
+    { name = "Filipe Romero", email = "felipe.romero@cincinnati-oh.gov" },
+    { name = "Trent Schade", email = "trent.schade@cincinnati-oh.gov" },
+    { name = "William Abbey", email = "william.abbey@cincinnati-oh.gov" },
+    { name = "Sebastian Otarola-Bustos", email = "SOtarolaBustos@hazenandsawyer.com" },
+    { name = "Mickey Tadese", email = "MTadesse@hazenandsawyer.com" },
 ]
+
 keywords = ["hydrology", "parsimonious", "model", "calibration", "pytorch"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -33,6 +38,8 @@ classifiers = [
 dependencies = [
     "numpy>=1.24",
     "pandas>=2.0",
+    "requests>=2.31",
+    "requests-toolbelt>=1.0",
 ]
 
 [project.optional-dependencies]

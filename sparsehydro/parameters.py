@@ -111,11 +111,17 @@ class ScalarParameter:
         invalid (``lower_bound > upper_bound``).
 
         :param value: New parameter value.
+        :type value: float | None
         :param lower_bound: New lower bound.
+        :type lower_bound: float | None
         :param upper_bound: New upper bound.
+        :type upper_bound: float | None
         :param units: New units string (e.g. ``"in"``, ``"m/s"``).
+        :type units: str | None
         :param description: New human-readable description.
+        :type description: str | None
         :param calibrate: New calibration flag.
+        :type calibrate: bool | None
         :raises ValueError: If ``lower_bound > upper_bound`` after the update.
         """
         if value is not None:
@@ -142,7 +148,7 @@ class FieldRecord:
     """Metadata for a single column in a model's ``predict()`` output DataFrame.
 
     Register one :class:`FieldRecord` per output column during
-    :meth:`~sparsehydro.interfaces.IModel.initialize` so that calibration
+    :meth:`~sparsehydro.models.IModel.initialize` so that calibration
     tooling, notebooks, and downstream consumers can discover what each column
     contains without inspecting the DataFrame itself.
 
@@ -193,7 +199,7 @@ class ConstraintRecord:
 
     Complements :class:`ScalarParameter` for the constraint side of the
     optimisation problem.  The residual values themselves are returned by
-    :meth:`~sparsehydro.interfaces.IModel.inequality_constraints`; this class
+    :meth:`~sparsehydro.models.IModel.inequality_constraints`; this class
     carries only the *identity* of each constraint so that solvers and
     notebooks can display meaningful labels.
 
@@ -346,10 +352,15 @@ class VectorParameter:
         Raises :class:`ValueError` if the resulting bounds or shape are invalid.
 
         :param values: New values array (must match current length).
+        :type values: numpy.ndarray | None
         :param lower_bounds: New lower bounds (scalar broadcast supported).
+        :type lower_bounds: numpy.ndarray | None
         :param upper_bounds: New upper bounds (scalar broadcast supported).
+        :type upper_bounds: numpy.ndarray | None
         :param units: New units string.
+        :type units: str | None
         :param description: New human-readable description.
+        :type description: str | None
         :raises ValueError: If the resulting configuration is invalid.
         """
         if values is not None:

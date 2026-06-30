@@ -8,7 +8,7 @@ import pandas as pd
 
 from sparsehydro.models import EnsembleModel
 from sparsehydro.enums import ModelState
-from sparsehydro.interfaces import IModel
+from sparsehydro.models import IModel
 from sparsehydro.parameters import ConstraintRecord, ScalarParameter
 
 

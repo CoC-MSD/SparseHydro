@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from sparsehydro.enums import ModelState
-from sparsehydro.interfaces import IModel
+from sparsehydro.models import IModel
 from sparsehydro.parameters import ScalarParameter, VectorParameter
 
 

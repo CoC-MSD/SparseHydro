@@ -27,26 +27,30 @@ import numpy as np
 import pandas as pd
 from scipy.signal import savgol_filter
 
+from .dryweather import (
+    DryWeatherResult,
+    disaggregate_dry_weather,
+    generate_weekly_patterns,
+)
+
 
 @dataclass
 class FilterResult:
     """Output of :func:`apply_savgol_filter`.
 
-    Attributes
-    ----------
-    datetime : pd.Series
-        Timestamps aligned to the stormflow input.
-    raw_flow : np.ndarray
-        Original stormflow values (clipped to ≥ 0).
-    sg_0 : np.ndarray
-        Smoothed signal (Savitzky-Golay 0th-order output).
-    sg_1 : np.ndarray
-        First derivative of the smoothed signal (slope).
-    sg_2 : np.ndarray
-        Second derivative of the smoothed signal (curvature).
-    thresholds : dict[str, float]
-        Populated by :func:`compute_thresholds`.
-        Keys: ``"sg_0_th"``, ``"sg_1_th"``, ``"sg_2_th"``.
+    :ivar datetime: Timestamps aligned to the stormflow input.
+    :vartype datetime: pandas.Series
+    :ivar raw_flow: Original stormflow values (clipped to ≥ 0).
+    :vartype raw_flow: numpy.ndarray
+    :ivar sg_0: Smoothed signal (Savitzky-Golay 0th-order output).
+    :vartype sg_0: numpy.ndarray
+    :ivar sg_1: First derivative of the smoothed signal (slope).
+    :vartype sg_1: numpy.ndarray
+    :ivar sg_2: Second derivative of the smoothed signal (curvature).
+    :vartype sg_2: numpy.ndarray
+    :ivar thresholds: Populated by :func:`compute_thresholds`.  Keys:
+        ``"sg_0_th"``, ``"sg_1_th"``, ``"sg_2_th"``.
+    :vartype thresholds: dict[str, float]
     """
 
     datetime: pd.Series
@@ -57,7 +61,11 @@ class FilterResult:
     thresholds: dict[str, float] = field(default_factory=dict)
 
     def to_dataframe(self) -> pd.DataFrame:
-        """Return a DataFrame with columns datetime, raw_flow, sg_0, sg_1, sg_2."""
+        """Return a DataFrame with columns datetime, raw_flow, sg_0, sg_1, sg_2.
+
+        :returns: Tidy frame combining the timestamps and signal arrays.
+        :rtype: pandas.DataFrame
+        """
         return pd.DataFrame(
             {
                 "datetime": self.datetime,
@@ -70,7 +78,15 @@ class FilterResult:
 
 
 def _get_safe_window(window: float, n: int) -> int:
-    """Round *window* to nearest odd integer, capped at *n*, minimum 3."""
+    """Round *window* to nearest odd integer, capped at *n*, minimum 3.
+
+    :param window: Desired window length (may be fractional).
+    :type window: float
+    :param n: Number of available samples (upper bound for the window).
+    :type n: int
+    :returns: Odd window length in ``[3, n]``.
+    :rtype: int
+    """
     val = int(round(window))
     val = min(val, n)
     val = max(val, 3)
@@ -87,23 +103,20 @@ def apply_savgol_filter(
 ) -> FilterResult:
     """Apply Savitzky-Golay smoothing and compute derivative signals.
 
-    Parameters
-    ----------
-    rain_stormflow : pd.DataFrame
-        Must contain columns ``datetime``, ``rain``, ``stormflow``.
-    window_length : int
-        Base window for the sg_0 smoother.  Windows for sg_1 and sg_2 are
-        scaled by successive powers of *deriv_factor*.
-    polyorder : int
-        Polynomial order for all filter passes.
-    deriv_factor : float
-        Multiplier applied to the window length for each derivative pass.
-
-    Returns
-    -------
-    FilterResult
-        Arrays of the same length as *rain_stormflow*; ``thresholds`` is empty
-        until :func:`compute_thresholds` is called.
+    :param rain_stormflow: Must contain columns ``datetime``, ``rain``,
+        ``stormflow``.
+    :type rain_stormflow: pandas.DataFrame
+    :param window_length: Base window for the sg_0 smoother.  Windows for sg_1
+        and sg_2 are scaled by successive powers of *deriv_factor*.
+    :type window_length: int
+    :param polyorder: Polynomial order for all filter passes.
+    :type polyorder: int
+    :param deriv_factor: Multiplier applied to the window length for each
+        derivative pass.
+    :type deriv_factor: float
+    :returns: Arrays of the same length as *rain_stormflow*; ``thresholds`` is
+        empty until :func:`compute_thresholds` is called.
+    :rtype: FilterResult
     """
     df = rain_stormflow.copy()
     df["datetime"] = pd.to_datetime(df["datetime"])
@@ -148,22 +161,17 @@ def compute_thresholds(
 ) -> FilterResult:
     """Attach percentile-based detection thresholds to *result*.
 
-    Parameters
-    ----------
-    result : FilterResult
-        Output of :func:`apply_savgol_filter`.
-    sg_0_per : float
-        ``sg_0_th = 95th-percentile(sg_0[sg_0 > 0]) * sg_0_per``.
-    sg_1_per : float
-        ``sg_1_th = std(sg_1) * sg_1_per``.
-    sg_2_per : float
-        ``sg_2_th = std(sg_2) * sg_2_per``.
-
-    Returns
-    -------
-    FilterResult
-        New :class:`FilterResult` with ``thresholds`` populated (immutable
+    :param result: Output of :func:`apply_savgol_filter`.
+    :type result: FilterResult
+    :param sg_0_per: ``sg_0_th = 95th-percentile(sg_0[sg_0 > 0]) * sg_0_per``.
+    :type sg_0_per: float
+    :param sg_1_per: ``sg_1_th = std(sg_1) * sg_1_per``.
+    :type sg_1_per: float
+    :param sg_2_per: ``sg_2_th = std(sg_2) * sg_2_per``.
+    :type sg_2_per: float
+    :returns: New :class:`FilterResult` with ``thresholds`` populated (immutable
         update — the original is not modified).
+    :rtype: FilterResult
     """
     sg_0_positive = result.sg_0[result.sg_0 > 0]
     if len(sg_0_positive) == 0:
@@ -188,4 +196,11 @@ def compute_thresholds(
     )
 
 
-__all__ = ["FilterResult", "apply_savgol_filter", "compute_thresholds"]
+__all__ = [
+    "FilterResult",
+    "apply_savgol_filter",
+    "compute_thresholds",
+    "DryWeatherResult",
+    "disaggregate_dry_weather",
+    "generate_weekly_patterns",
+]

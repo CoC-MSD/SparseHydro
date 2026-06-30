@@ -51,6 +51,8 @@ _INF_SUBSTITUTE = 1e9  # finite stand-in for np.inf in ScalarParameter bounds
 def _get_uh_class() -> type:
     """Return the ``UnitHydrograph`` class, importing it on first call.
 
+    :returns: The lazily-imported ``UnitHydrograph`` class.
+    :rtype: type
     :raises ImportError: If ``uh_models`` is not importable.
     """
     global _UnitHydrograph
@@ -128,6 +130,8 @@ class UnitHydrographAdapter(IUnitHydroComponent):
     def initialize(self) -> None:
         """Construct the wrapped ``UnitHydrograph`` and register its parameters.
 
+        :returns: Nothing.
+        :rtype: None
         :raises TypeError: If called on the base ``UnitHydrographAdapter``
             instead of a factory-created subclass.
         """
@@ -163,7 +167,11 @@ class UnitHydrographAdapter(IUnitHydroComponent):
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:
-        """Validate that all registered parameters satisfy their bounds."""
+        """Validate that all registered parameters satisfy their bounds.
+
+        :returns: ``True`` if all parameters are within bounds.
+        :rtype: bool
+        """
         ok = self.parameters_valid()
         if ok:
             self._state = ModelState.VALIDATED
@@ -174,7 +182,16 @@ class UnitHydrographAdapter(IUnitHydroComponent):
         rain_stormflow: pd.DataFrame,
         **kwargs: Any,
     ) -> None:
-        """Store the input DataFrame and sync parameters to the wrapped model."""
+        """Store the input DataFrame and sync parameters to the wrapped model.
+
+        :param rain_stormflow: Rainfall/stormflow forcing DataFrame consumed by
+            the wrapped ``UnitHydrograph``.
+        :type rain_stormflow: pandas.DataFrame
+        :param kwargs: Reserved for API compatibility; ignored.
+        :type kwargs: Any
+        :returns: Nothing.
+        :rtype: None
+        """
         self._prepared_data = rain_stormflow
         self._sync_to_uh()
         self._state = ModelState.PREPARED
@@ -184,7 +201,18 @@ class UnitHydrographAdapter(IUnitHydroComponent):
         predict_range: Any = None,
         trim: bool = True,
     ) -> pd.DataFrame:
-        """Convolve stored rainfall with the UH shape and return predicted flow."""
+        """Convolve stored rainfall with the UH shape and return predicted flow.
+
+        :param predict_range: Optional prediction window forwarded to the
+            wrapped model's ``predict``.
+        :type predict_range: Any
+        :param trim: Whether to trim the convolution output to the input length.
+        :type trim: bool
+        :returns: Predicted-flow DataFrame from the wrapped model.
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`initialize` or :meth:`prepare` has not
+            been called.
+        """
         if self._uh is None or self._prepared_data is None:
             raise RuntimeError(
                 "Call initialize() and prepare(rain_stormflow) before predict()."
@@ -197,7 +225,11 @@ class UnitHydrographAdapter(IUnitHydroComponent):
         return result
 
     def finalize(self) -> None:
-        """Release the stored DataFrame and advance state to ``FINALIZED``."""
+        """Release the stored DataFrame and advance state to ``FINALIZED``.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self._prepared_data = None
         self._state = ModelState.FINALIZED
 
@@ -210,7 +242,17 @@ class UnitHydrographAdapter(IUnitHydroComponent):
         rain_stormflow: pd.DataFrame,
         **kwargs: Any,
     ) -> dict[str, float]:
-        """Calibrate the wrapped ``UnitHydrograph`` and sync results back."""
+        """Calibrate the wrapped ``UnitHydrograph`` and sync results back.
+
+        :param rain_stormflow: Rainfall/stormflow forcing DataFrame.
+        :type rain_stormflow: pandas.DataFrame
+        :param kwargs: Additional keyword arguments forwarded to the wrapped
+            model's ``fit``.
+        :type kwargs: Any
+        :returns: Mapping of fitted parameter name to value.
+        :rtype: dict[str, float]
+        :raises RuntimeError: If :meth:`initialize` has not been called.
+        """
         if self._uh is None:
             raise RuntimeError("Call initialize() before fit().")
         self._sync_to_uh()
@@ -223,7 +265,17 @@ class UnitHydrographAdapter(IUnitHydroComponent):
     # ------------------------------------------------------------------
 
     def get_uh(self, max_steps: int = 864, norm: int = 0) -> np.ndarray:
-        """Return the unit hydrograph ordinate array from the wrapped model."""
+        """Return the unit hydrograph ordinate array from the wrapped model.
+
+        :param max_steps: Maximum number of ordinates to return.
+        :type max_steps: int
+        :param norm: Normalisation mode passed to the wrapped model
+            (``0`` raw, ``1`` unit-area).
+        :type norm: int
+        :returns: UH ordinate array.
+        :rtype: numpy.ndarray
+        :raises RuntimeError: If :meth:`initialize` has not been called.
+        """
         if self._uh is None:
             raise RuntimeError("Call initialize() before get_uh().")
         self._sync_to_uh()
@@ -242,6 +294,14 @@ class UnitHydrographAdapter(IUnitHydroComponent):
         .. note::
             The ``dt_hours`` argument is accepted for API uniformity but does
             not resample the kernel.
+
+        :param dt_hours: Time-step size [hr] (accepted for API uniformity).
+        :type dt_hours: float
+        :param n_steps: Number of output steps; defaults to the natural support.
+        :type n_steps: int | None
+        :returns: Unit-area UH ordinate array.
+        :rtype: numpy.ndarray
+        :raises RuntimeError: If :meth:`initialize` has not been called.
         """
         if self._uh is None:
             raise RuntimeError("Call initialize() before get_kernel().")
@@ -256,7 +316,11 @@ class UnitHydrographAdapter(IUnitHydroComponent):
 
     @property
     def is_fit(self) -> bool:
-        """``True`` if the wrapped ``UnitHydrograph`` has been successfully fitted."""
+        """``True`` if the wrapped ``UnitHydrograph`` has been successfully fitted.
+
+        :returns: Fit status of the wrapped model (``False`` if not yet built).
+        :rtype: bool
+        """
         return bool(self._uh.is_fit) if self._uh is not None else False
 
     # ------------------------------------------------------------------
@@ -264,7 +328,11 @@ class UnitHydrographAdapter(IUnitHydroComponent):
     # ------------------------------------------------------------------
 
     def _sync_to_uh(self) -> None:
-        """Push ``ScalarParameter.value`` → ``_uh.parameters`` dict."""
+        """Push ``ScalarParameter.value`` → ``_uh.parameters`` dict.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         if self._uh is None:
             return
         for name, param in self._scalar_parameters.items():
@@ -272,7 +340,11 @@ class UnitHydrographAdapter(IUnitHydroComponent):
                 self._uh.parameters[name] = param.value
 
     def _sync_from_uh(self) -> None:
-        """Pull ``_uh.parameters`` dict → ``ScalarParameter.value``."""
+        """Pull ``_uh.parameters`` dict → ``ScalarParameter.value``.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         if self._uh is None:
             return
         for name, value in self._uh.parameters.items():
@@ -289,7 +361,9 @@ def create_uh_model(uh_model_name: str) -> type[UnitHydrographAdapter]:
 
     :param uh_model_name: Key in ``UnitHydrograph._registry``
         (e.g. ``"Nash"``, ``"Gamma"``, ``"Weibull"``).
+    :type uh_model_name: str
     :returns: Concrete ``UnitHydrographAdapter`` subclass.
+    :rtype: type[UnitHydrographAdapter]
     :raises KeyError: If ``uh_model_name`` is not in
         ``UnitHydrograph._registry``.
     """

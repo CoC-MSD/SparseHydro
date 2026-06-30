@@ -49,7 +49,17 @@ from ...parameters import FieldRecord, ScalarParameter
 
 
 def _wet_step_excess(ia0: float, k_dep: float, P: float) -> float:
-    """Exact rainfall excess for one wet step (uniform intra-step rainfall)."""
+    """Exact rainfall excess for one wet step (uniform intra-step rainfall).
+
+    :param ia0: Available abstraction capacity at the start of the step.
+    :type ia0: float
+    :param k_dep: Depletion rate constant.
+    :type k_dep: float
+    :param P: Rainfall depth over the step.
+    :type P: float
+    :returns: Rainfall excess depth produced during the step.
+    :rtype: float
+    """
     if P <= 0.0:
         return 0.0
     if k_dep * ia0 <= 1.0:
@@ -70,17 +80,28 @@ class IAModel(IModel):
 
     :param ia_max: Maximum abstraction capacity.  Defaults to 0.2 in (imperial)
         or 5.0 mm (metric).  Pass ``None`` to use the unit-appropriate default.
+    :type ia_max: float | None
     :param k0: Base recovery rate constant [1/hr].
+    :type k0: float
     :param kT: Temperature-dependent recovery coefficient [1/hr].
+    :type kT: float
     :param theta: Temperature sensitivity exponent [1/°C].
+    :type theta: float
     :param T_ref: Reference temperature [°C].
+    :type T_ref: float
     :param k_dep: Depletion rate constant.  Defaults to 7.62 /in (imperial)
         or 0.3 /mm (metric).  Pass ``None`` to use the unit-appropriate default.
+    :type k_dep: float | None
     :param T_freeze: Temperature below which recovery is suppressed [°C].
+    :type T_freeze: float
     :param units: Unit system — ``"imperial"`` (default, inches) or ``"metric"`` (mm).
+    :type units: str
     :param snow: Enable the degree-day snow model.
+    :type snow: bool
     :param snow_T: Initial rain/snow threshold & melt base [°C].
+    :type snow_T: float
     :param snow_ddf: Initial degree-day factor.
+    :type snow_ddf: float | None
     """
 
     model_name = "initial-abstraction"
@@ -132,7 +153,11 @@ class IAModel(IModel):
     # ------------------------------------------------------------------
 
     def initialize(self) -> None:
-        """Register all IA scalar parameters and advance to INITIALIZED."""
+        """Register all IA scalar parameters and advance to INITIALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         if self._units == "imperial":
             ia_max_lb, ia_max_ub, ia_max_units = 0.004, 2.0, "in"
             ia_kdep_lb, ia_kdep_ub, ia_kdep_units = 0.25, 127.0, "1/in"
@@ -200,7 +225,12 @@ class IAModel(IModel):
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:
-        """Validate parameter bounds and physical constraint T_freeze < T_ref."""
+        """Validate parameter bounds and physical constraint T_freeze < T_ref.
+
+        :returns: ``True`` if all parameters are within bounds and
+            ``T_freeze < T_ref``.
+        :rtype: bool
+        """
         if not self.parameters_valid():
             return False
         T_freeze = self.get_scalar_parameter("ia_T_freeze").value
@@ -211,7 +241,16 @@ class IAModel(IModel):
         return True
 
     def prepare(self, data: pd.DataFrame) -> None:
-        """Load forcing data and sync parameters from the registry."""
+        """Load forcing data and sync parameters from the registry.
+
+        :param data: DataFrame with columns ``datetime`` and the unit-specific
+            rainfall column (``rainfall_in`` or ``rainfall_mm``); an optional
+            ``temperature_c`` column defaults to ``T_ref`` when absent.
+        :type data: pandas.DataFrame
+        :returns: Nothing.
+        :rtype: None
+        :raises ValueError: If required columns are absent.
+        """
         required = {"datetime", self._rainfall_col}
         missing = required - set(data.columns)
         if missing:
@@ -234,7 +273,13 @@ class IAModel(IModel):
         self._state = ModelState.PREPARED
 
     def predict(self) -> pd.DataFrame:
-        """Compute rainfall excess for the prepared time series."""
+        """Compute rainfall excess for the prepared time series.
+
+        :returns: DataFrame with columns ``datetime`` and the unit-specific
+            excess column (``p_excess_in`` or ``p_excess_mm``).
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
         if self._prepared_df is None:
             raise RuntimeError("Call prepare(data) before predict().")
 
@@ -268,7 +313,11 @@ class IAModel(IModel):
         return result
 
     def finalize(self) -> None:
-        """Release stored forcing data and advance to FINALIZED."""
+        """Release stored forcing data and advance to FINALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self._prepared_df = None
         self._state = ModelState.FINALIZED
 
@@ -277,14 +326,28 @@ class IAModel(IModel):
     # ------------------------------------------------------------------
 
     def recovery_rate(self, temperature: float | None = None) -> float:
-        """Compute k_rec(T) = k0 + kT * exp(θ*(T - T_ref)), zeroed below T_freeze."""
+        """Compute k_rec(T) = k0 + kT * exp(θ*(T - T_ref)), zeroed below T_freeze.
+
+        :param temperature: Air temperature [°C]; defaults to ``T_ref``.
+        :type temperature: float | None
+        :returns: Recovery rate constant [1/hr] (``0.0`` below ``T_freeze``).
+        :rtype: float
+        """
         T = self.T_ref if temperature is None else float(temperature)
         if T < self.T_freeze:
             return 0.0
         return self.k0 + self.kT * math.exp(self.theta * (T - self.T_ref))
 
     def step_dry(self, dt_hours: float, temperature: float | None = None) -> float:
-        """Advance ``ia_avail`` over a dry interval of ``dt_hours``."""
+        """Advance ``ia_avail`` over a dry interval of ``dt_hours``.
+
+        :param dt_hours: Length of the dry interval [hr].
+        :type dt_hours: float
+        :param temperature: Air temperature [°C]; defaults to ``T_ref``.
+        :type temperature: float | None
+        :returns: Updated available abstraction capacity ``ia_avail``.
+        :rtype: float
+        """
         k = self.recovery_rate(temperature)
         deficit = self.ia_max - self.ia_avail
         self.ia_avail = self.ia_max - deficit * math.exp(-k * dt_hours)
@@ -292,7 +355,13 @@ class IAModel(IModel):
         return self.ia_avail
 
     def step_wet(self, delta_precip_mm: float) -> float:
-        """Deplete ``ia_avail`` for a rainfall pulse of ``delta_precip_mm`` mm."""
+        """Deplete ``ia_avail`` for a rainfall pulse of ``delta_precip_mm`` mm.
+
+        :param delta_precip_mm: Rainfall depth applied this step.
+        :type delta_precip_mm: float
+        :returns: Updated available abstraction capacity ``ia_avail``.
+        :rtype: float
+        """
         if delta_precip_mm <= 0.0:
             return self.ia_avail
         self.ia_avail = self.ia_avail * math.exp(-self.k_dep * delta_precip_mm)
@@ -300,7 +369,13 @@ class IAModel(IModel):
         return self.ia_avail
 
     def compute_excess(self, rainfall_mm: float) -> float:
-        """Return rainfall excess and deplete ``ia_avail`` accordingly."""
+        """Return rainfall excess and deplete ``ia_avail`` accordingly.
+
+        :param rainfall_mm: Rainfall depth applied this step.
+        :type rainfall_mm: float
+        :returns: Rainfall excess depth for the step.
+        :rtype: float
+        """
         if rainfall_mm <= 0.0:
             return 0.0
         excess = _wet_step_excess(self.ia_avail, self.k_dep, rainfall_mm)
@@ -308,7 +383,11 @@ class IAModel(IModel):
         return excess
 
     def reset(self) -> None:
-        """Reset ``ia_avail`` to ``ia_max`` (fully recovered state)."""
+        """Reset ``ia_avail`` to ``ia_max`` (fully recovered state).
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self.ia_avail = self.ia_max
 
     # ------------------------------------------------------------------
@@ -334,6 +413,34 @@ class IAModel(IModel):
 
         Pure function (no instance state) — safe for parallel optimizer use.
         ``ia_avail`` starts at ``ia_max`` (fully saturated capacity).
+
+        :param rainfall_mm: Per-step rainfall depth series.
+        :type rainfall_mm: numpy.ndarray
+        :param dt_hours: Per-step interval length series [hr].
+        :type dt_hours: numpy.ndarray
+        :param temperature: Per-step temperature series [°C], or ``None`` to use
+            ``T_ref`` everywhere.
+        :type temperature: numpy.ndarray | None
+        :param ia_max: Maximum abstraction capacity.
+        :type ia_max: float
+        :param k0: Base recovery rate constant [1/hr].
+        :type k0: float
+        :param kT: Temperature-dependent recovery coefficient [1/hr].
+        :type kT: float
+        :param theta: Temperature sensitivity exponent [1/°C].
+        :type theta: float
+        :param T_ref: Reference temperature [°C].
+        :type T_ref: float
+        :param k_dep: Depletion rate constant.
+        :type k_dep: float
+        :param T_freeze: Temperature below which recovery is suppressed [°C].
+        :type T_freeze: float
+        :param snow_ddf: Degree-day snowmelt factor (``0.0`` disables melt).
+        :type snow_ddf: float
+        :param snow_T: Rain/snow threshold [°C], or ``None`` to disable snow.
+        :type snow_T: float | None
+        :returns: Rainfall excess depth series, same length as *rainfall_mm*.
+        :rtype: numpy.ndarray
         """
         n = len(rainfall_mm)
         excess = np.zeros(n, dtype=float)
@@ -377,7 +484,11 @@ class IAModel(IModel):
     # ------------------------------------------------------------------
 
     def _sync_from_params(self) -> None:
-        """Update instance attributes from the scalar-parameter registry."""
+        """Update instance attributes from the scalar-parameter registry.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self.ia_max = self.get_scalar_parameter("ia_max").value
         self.k0 = self.get_scalar_parameter("ia_k0").value
         self.kT = self.get_scalar_parameter("ia_kT").value

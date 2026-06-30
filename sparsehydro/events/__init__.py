@@ -35,26 +35,27 @@ from ..filters import FilterResult, apply_savgol_filter, compute_thresholds
 class EventRecord:
     """A single detected or imported storm event.
 
-    Attributes
-    ----------
-    event_id : int
-        Sequential identifier starting at 1.
-    start_datetime : pd.Timestamp
-    end_datetime : pd.Timestamp
-    peak_datetime : pd.Timestamp
-        Timestamp of the sg_0 peak within the event window.
-    total_rain : float
-        Cumulative rain depth over [start, end].
-    total_flow : float
-        Cumulative stormflow over [start, end] (clipped to ≥ 0).
-    effective_area : float
-        ``total_flow / total_rain``.  Zero when ``total_rain == 0``.
-    peak_flow : float
-        Maximum stormflow value within the event window.
-    b2b_start : bool
-        True if the event starts at a back-to-back trough.
-    b2b_end : bool
-        True if the event ends at a back-to-back trough.
+    :ivar event_id: Sequential identifier starting at 1.
+    :vartype event_id: int
+    :ivar start_datetime: Event start timestamp.
+    :vartype start_datetime: pandas.Timestamp
+    :ivar end_datetime: Event end timestamp.
+    :vartype end_datetime: pandas.Timestamp
+    :ivar peak_datetime: Timestamp of the sg_0 peak within the event window.
+    :vartype peak_datetime: pandas.Timestamp
+    :ivar total_rain: Cumulative rain depth over [start, end].
+    :vartype total_rain: float
+    :ivar total_flow: Cumulative stormflow over [start, end] (clipped to ≥ 0).
+    :vartype total_flow: float
+    :ivar effective_area: ``total_flow / total_rain``.  Zero when
+        ``total_rain == 0``.
+    :vartype effective_area: float
+    :ivar peak_flow: Maximum stormflow value within the event window.
+    :vartype peak_flow: float
+    :ivar b2b_start: ``True`` if the event starts at a back-to-back trough.
+    :vartype b2b_start: bool
+    :ivar b2b_end: ``True`` if the event ends at a back-to-back trough.
+    :vartype b2b_end: bool
     """
 
     event_id: int
@@ -69,11 +70,19 @@ class EventRecord:
     b2b_end: bool = False
 
     def duration_hours(self) -> float:
-        """Return event duration in hours."""
+        """Return event duration in hours.
+
+        :returns: Duration between *start_datetime* and *end_datetime* in hours.
+        :rtype: float
+        """
         return (self.end_datetime - self.start_datetime).total_seconds() / 3600.0
 
     def to_dict(self) -> dict:
-        """Serialize to plain dict."""
+        """Serialize to plain dict.
+
+        :returns: Mapping of every event field to its value.
+        :rtype: dict
+        """
         return {
             "event_id": self.event_id,
             "start_datetime": self.start_datetime,
@@ -89,7 +98,13 @@ class EventRecord:
 
 
 def events_to_dataframe(events: list[EventRecord]) -> pd.DataFrame:
-    """Convert a list of :class:`EventRecord` objects to a DataFrame."""
+    """Convert a list of :class:`EventRecord` objects to a DataFrame.
+
+    :param events: Events to convert (may be empty).
+    :type events: list[EventRecord]
+    :returns: One row per event with all event fields as columns.
+    :rtype: pandas.DataFrame
+    """
     if not events:
         return pd.DataFrame(
             columns=[
@@ -107,13 +122,10 @@ def load_events_from_csv(path: str | os.PathLike) -> list[EventRecord]:
     The CSV must have columns ``event_id``, ``start_date``, ``end_date``.
     Fields not present in the CSV are filled with sentinel values.
 
-    Parameters
-    ----------
-    path : str or path-like
-
-    Returns
-    -------
-    list[EventRecord]
+    :param path: Path to the ``events_list.csv`` file.
+    :type path: str or os.PathLike
+    :returns: Events parsed from the CSV (sentinel values for missing fields).
+    :rtype: list[EventRecord]
     """
     df = pd.read_csv(path, parse_dates=["start_date", "end_date"])
     events: list[EventRecord] = []
@@ -146,6 +158,21 @@ def _find_peaks_with_thresholds(
     width_perc: float,
     distance: int,
 ) -> np.ndarray:
+    """Return peak indices passing percentile-based thresholds.
+
+    :param sg_0: Smoothed stormflow signal (sg_0).
+    :type sg_0: numpy.ndarray
+    :param height_perc: Percentile (0-100) of peak heights used as a threshold.
+    :type height_perc: float
+    :param prom_perc: Percentile (0-100) of peak prominences used as a threshold.
+    :type prom_perc: float
+    :param width_perc: Percentile (0-100) of peak widths used as a threshold.
+    :type width_perc: float
+    :param distance: Minimum number of samples between accepted peaks.
+    :type distance: int
+    :returns: Indices of accepted peaks (empty array if none).
+    :rtype: numpy.ndarray
+    """
     idx_all, props_all = find_peaks(sg_0, height=0, prominence=0, width=1)
     if len(idx_all) == 0:
         return np.array([], dtype=int)
@@ -161,6 +188,21 @@ def _find_peaks_with_thresholds(
 
 
 def _calc_window(window_size, sg_0_win, sg_1_win, sg_0_th, sg_1_th):
+    """Adapt the boundary-walk window based on local signal magnitudes.
+
+    :param window_size: Base window size.
+    :type window_size: int
+    :param sg_0_win: sg_0 values in the current window.
+    :type sg_0_win: numpy.ndarray
+    :param sg_1_win: sg_1 values in the current window.
+    :type sg_1_win: numpy.ndarray
+    :param sg_0_th: sg_0 steady-state threshold.
+    :type sg_0_th: float
+    :param sg_1_th: sg_1 steady-state threshold.
+    :type sg_1_th: float
+    :returns: Adapted window size, clamped to ``[2, window_size]``.
+    :rtype: int
+    """
     mean_sg0 = float(np.mean(sg_0_win))
     mean_abs_sg1 = float(np.mean(np.abs(sg_1_win)))
     if mean_abs_sg1 > 1e-6 and mean_sg0 > 1e-6:
@@ -171,6 +213,28 @@ def _calc_window(window_size, sg_0_win, sg_1_win, sg_0_th, sg_1_th):
 
 
 def _backward_walk(sg_0, sg_1, sg_2, peak, window_size, sg_0_th, sg_1_th, sg_2_th):
+    """Walk backward from a peak to locate the event start index.
+
+    :param sg_0: Smoothed signal (zeroth derivative).
+    :type sg_0: numpy.ndarray
+    :param sg_1: First derivative signal.
+    :type sg_1: numpy.ndarray
+    :param sg_2: Second derivative signal.
+    :type sg_2: numpy.ndarray
+    :param peak: Peak index to walk back from.
+    :type peak: int
+    :param window_size: Base look-back window size.
+    :type window_size: int
+    :param sg_0_th: sg_0 steady-state threshold.
+    :type sg_0_th: float
+    :param sg_1_th: sg_1 steady-state threshold.
+    :type sg_1_th: float
+    :param sg_2_th: sg_2 steady-state threshold.
+    :type sg_2_th: float
+    :returns: Tuple ``(start_idx, b2b_start)`` where *b2b_start* flags a
+        back-to-back trough boundary.
+    :rtype: tuple[int, bool]
+    """
     lower_bound = min(window_size, peak)
     start_idx = peak
     min_val_bwd = sg_0[peak]
@@ -206,6 +270,28 @@ def _backward_walk(sg_0, sg_1, sg_2, peak, window_size, sg_0_th, sg_1_th, sg_2_t
 
 
 def _forward_walk(sg_0, sg_1, sg_2, peak, window_size, sg_0_th, sg_1_th, sg_2_th):
+    """Walk forward from a peak to locate the event end index.
+
+    :param sg_0: Smoothed signal (zeroth derivative).
+    :type sg_0: numpy.ndarray
+    :param sg_1: First derivative signal.
+    :type sg_1: numpy.ndarray
+    :param sg_2: Second derivative signal.
+    :type sg_2: numpy.ndarray
+    :param peak: Peak index to walk forward from.
+    :type peak: int
+    :param window_size: Base look-ahead window size.
+    :type window_size: int
+    :param sg_0_th: sg_0 steady-state threshold.
+    :type sg_0_th: float
+    :param sg_1_th: sg_1 steady-state threshold.
+    :type sg_1_th: float
+    :param sg_2_th: sg_2 steady-state threshold.
+    :type sg_2_th: float
+    :returns: Tuple ``(end_idx, b2b_end)`` where *b2b_end* flags a
+        back-to-back trough boundary.
+    :rtype: tuple[int, bool]
+    """
     n = len(sg_0)
     upper_bound = max(peak + 1, n - window_size)
     end_idx = peak
@@ -245,6 +331,32 @@ def _resolve_collisions(
     events_raw, peak, start_idx, end_idx, b2b_start, b2b_end,
     sg_0, sg_0_th, simp_th, back_to_back,
 ):
+    """Merge or split the current event against already-detected events.
+
+    :param events_raw: Previously accepted raw event dicts (mutated in place).
+    :type events_raw: list[dict]
+    :param peak: Peak index of the current candidate event.
+    :type peak: int
+    :param start_idx: Start index of the current candidate event.
+    :type start_idx: int
+    :param end_idx: End index of the current candidate event.
+    :type end_idx: int
+    :param b2b_start: Whether the candidate starts at a back-to-back trough.
+    :type b2b_start: bool
+    :param b2b_end: Whether the candidate ends at a back-to-back trough.
+    :type b2b_end: bool
+    :param sg_0: Smoothed signal (zeroth derivative).
+    :type sg_0: numpy.ndarray
+    :param sg_0_th: sg_0 steady-state threshold.
+    :type sg_0_th: float
+    :param simp_th: Height-ratio threshold for merging near-equal peaks (0-1).
+    :type simp_th: float
+    :param back_to_back: Whether to keep distinct events separated at troughs.
+    :type back_to_back: bool
+    :returns: Updated ``(events_raw, peak, start_idx, end_idx, b2b_start,
+        b2b_end)``.
+    :rtype: tuple[list[dict], int, int, int, bool, bool]
+    """
     while events_raw:
         prev = events_raw[-1]
         if not (start_idx <= prev["end_idx"] or b2b_start or prev["b2b_end"]):
@@ -312,38 +424,44 @@ def detect_events(
 ) -> tuple[list[EventRecord], FilterResult]:
     """Detect storm events using Savitzky-Golay derivative segmentation.
 
-    Parameters
-    ----------
-    rain_stormflow : pd.DataFrame
-        Must contain ``datetime``, ``rain``, ``stormflow``.
-    time_range : (start, end) str tuple, optional
-        Restrict detection to this date range.
-    back_to_back : bool
-        When True, keep distinct events separated at troughs.
-    height_perc, prom_perc, width_perc : float
-        Percentile thresholds for peak detection (0–100 range).
-    distance : int
-        Minimum samples between peaks.
-    window_length : int
-        Base Savitzky-Golay window for sg_0.
-    polyorder : int
-        Savitzky-Golay polynomial order.
-    deriv_factor : float
-        Window multiplier for each successive derivative pass.
-    sg_0_per, sg_1_per, sg_2_per : float
-        Threshold multipliers for boundary detection.
-    window_size : int
-        Look-ahead/look-back window for boundary walks.
-    simp_th : float
-        Height-ratio threshold for merging near-equal adjacent peaks (0–1).
-    verbose : bool
-
-    Returns
-    -------
-    events : list[EventRecord]
-        Detected events (event_id starts at 1).
-    filter_result : FilterResult
-        sg signals + computed thresholds for diagnostics.
+    :param rain_stormflow: Must contain ``datetime``, ``rain``, ``stormflow``.
+    :type rain_stormflow: pandas.DataFrame
+    :param time_range: Restrict detection to this ``(start, end)`` date range.
+    :type time_range: tuple[str, str] | None
+    :param back_to_back: When ``True``, keep distinct events separated at troughs.
+    :type back_to_back: bool
+    :param height_perc: Percentile threshold for peak height (0-100).
+    :type height_perc: float
+    :param prom_perc: Percentile threshold for peak prominence (0-100).
+    :type prom_perc: float
+    :param width_perc: Percentile threshold for peak width (0-100).
+    :type width_perc: float
+    :param distance: Minimum samples between peaks.
+    :type distance: int
+    :param window_length: Base Savitzky-Golay window for sg_0.
+    :type window_length: int
+    :param polyorder: Savitzky-Golay polynomial order.
+    :type polyorder: int
+    :param deriv_factor: Window multiplier for each successive derivative pass.
+    :type deriv_factor: float
+    :param sg_0_per: Threshold multiplier for the sg_0 boundary signal.
+    :type sg_0_per: float
+    :param sg_1_per: Threshold multiplier for the sg_1 boundary signal.
+    :type sg_1_per: float
+    :param sg_2_per: Threshold multiplier for the sg_2 boundary signal.
+    :type sg_2_per: float
+    :param window_size: Look-ahead/look-back window for boundary walks.
+    :type window_size: int
+    :param simp_th: Height-ratio threshold for merging near-equal adjacent peaks
+        (0-1).
+    :type simp_th: float
+    :param verbose: Print progress diagnostics.
+    :type verbose: bool
+    :returns: Tuple ``(events, filter_result)`` where *events* are the detected
+        :class:`EventRecord` objects (``event_id`` starts at 1) and
+        *filter_result* holds the sg signals and computed thresholds for
+        diagnostics.
+    :rtype: tuple[list[EventRecord], FilterResult]
     """
     df = rain_stormflow.copy()
     df["datetime"] = pd.to_datetime(df["datetime"])

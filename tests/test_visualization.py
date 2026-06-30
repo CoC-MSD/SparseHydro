@@ -443,8 +443,7 @@ class TestPlotParetoScatterMatrix:
 @pytest.fixture(scope="module")
 def rtk_triangles():
     """Two RTKTriangle instances (initialized + prepared)."""
-    rdii = pytest.importorskip("sparsehydro.rdii", reason="sparsehydro.rdii not installed")
-    RTKTriangle = rdii.RTKTriangle
+    from sparsehydro.models.rdii import RTKTriangle
     tri1 = RTKTriangle(R=0.05, T=1.0, K=2.0)
     tri1.initialize()
     tri1.validate()
@@ -684,18 +683,23 @@ class TestBackwardCompatibility:
     def test_sparsehydro_top_level_imports(self):
         import sparsehydro
 
-        assert hasattr(sparsehydro, "plot_timeseries")
-        assert hasattr(sparsehydro, "plot_pareto_evolution")
-        assert hasattr(sparsehydro, "plot_parallel_coordinates")
-        assert hasattr(sparsehydro, "VisualizationModel")
-        # new names also reachable at top level
-        assert hasattr(sparsehydro, "plot_residuals_scatter")
-        assert hasattr(sparsehydro, "plot_cumulative_volume")
-        assert hasattr(sparsehydro, "plot_objective_convergence")
-        assert hasattr(sparsehydro, "plot_parameter_distributions")
-        assert hasattr(sparsehydro, "plot_sensitivity_heatmap")
-        assert hasattr(sparsehydro, "plot_pareto_scatter_matrix")
-        assert hasattr(sparsehydro, "plot_calibration_dashboard")
+        # Only the curated core is re-exported at the top level.
+        for name in (
+            "ModelState",
+            "IModel",
+            "IUnitHydroComponent",
+            "ScalarParameter",
+            "VectorParameter",
+            "FieldRecord",
+            "ModelRegistry",
+            "registry",
+        ):
+            assert hasattr(sparsehydro, name)
+
+        # Visualization names are no longer hoisted to the top level; they live
+        # in the sparsehydro.visualization sub-package.
+        assert not hasattr(sparsehydro, "plot_timeseries")
+        assert not hasattr(sparsehydro, "VisualizationModel")
 
     def test_visualization_module_imports(self):
         from sparsehydro.visualization import (
@@ -713,15 +717,3 @@ class TestBackwardCompatibility:
         )
         assert callable(plot_timeseries)
         assert callable(plot_calibration_dashboard)
-
-    def test_rdii_shim_still_works(self):
-        """sparsehydro.rdii.visualization still re-exports the three core functions."""
-        try:
-            from sparsehydro.rdii.visualization import (
-                plot_parallel_coordinates,
-                plot_pareto_evolution,
-                plot_timeseries,
-            )
-            assert callable(plot_timeseries)
-        except ImportError:
-            pytest.skip("sparsehydro.rdii not installed")

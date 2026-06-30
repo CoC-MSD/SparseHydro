@@ -18,12 +18,14 @@ Generic models
 """
 
 from .base import IModel, IUnitHydroComponent
+from .amm import AMMModel
 from .ensemble import EnsembleModel
 from .seasonality import SeasonalityModel
 
 __all__ = [
     "IModel",
     "IUnitHydroComponent",
+    "AMMModel",
     "EnsembleModel",
     "SeasonalityModel",
     "ITorchModel",

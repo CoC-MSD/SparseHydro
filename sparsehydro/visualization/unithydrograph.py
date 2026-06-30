@@ -31,12 +31,28 @@ _D3 = [
 
 
 def _event_color(idx: int, alpha: float = 0.15) -> str:
+    """Return a translucent ``rgba(...)`` colour for event index *idx*.
+
+    :param idx: Event index (cycles through the D3 palette).
+    :type idx: int
+    :param alpha: Alpha (opacity) value in ``[0, 1]``.
+    :type alpha: float
+    :returns: CSS ``rgba(...)`` colour string.
+    :rtype: str
+    """
     hex_col = _D3[idx % len(_D3)].lstrip("#")
     r, g, b = int(hex_col[0:2], 16), int(hex_col[2:4], 16), int(hex_col[4:6], 16)
     return f"rgba({r},{g},{b},{alpha})"
 
 
 def _solid_event_color(idx: int) -> str:
+    """Return the solid hex colour for event index *idx*.
+
+    :param idx: Event index (cycles through the D3 palette).
+    :type idx: int
+    :returns: Hex colour string.
+    :rtype: str
+    """
     return _D3[idx % len(_D3)]
 
 
@@ -46,6 +62,13 @@ def _nearest_idx(dt_ns: np.ndarray, target: pd.Timestamp) -> int:
     *dt_ns* must be a sorted int64 array of nanoseconds-since-epoch values
     (obtained via ``pd.to_datetime(series).values.astype('int64')``).
     O(log N) vs the previous O(N) linear scan.
+
+    :param dt_ns: Sorted int64 array of nanoseconds-since-epoch values.
+    :type dt_ns: numpy.ndarray
+    :param target: Target timestamp to locate.
+    :type target: pandas.Timestamp
+    :returns: Index of the nearest element in *dt_ns*.
+    :rtype: int
     """
     t = np.int64(target.value)
     i = int(np.searchsorted(dt_ns, t, side="left"))
@@ -60,7 +83,15 @@ def _downsample_bar(t: np.ndarray, y: np.ndarray, max_pts: int = 2000):
     """Reduce a large array to at most *max_pts* points for Bar rendering.
 
     Uses max-within-bin so rainfall peaks are preserved.
-    Returns (t_ds, y_ds); unchanged if ``len(y) <= max_pts``.
+
+    :param t: Time axis array.
+    :type t: numpy.ndarray
+    :param y: Values aligned with *t*.
+    :type y: numpy.ndarray
+    :param max_pts: Maximum number of output points.
+    :type max_pts: int
+    :returns: Tuple ``(t_ds, y_ds)``; unchanged if ``len(y) <= max_pts``.
+    :rtype: tuple[numpy.ndarray, numpy.ndarray]
     """
     n = len(y)
     if n <= max_pts:
@@ -73,7 +104,13 @@ def _downsample_bar(t: np.ndarray, y: np.ndarray, max_pts: int = 2000):
 
 
 def _row_yref(row: int) -> str:
-    """Return the Plotly yref string for the given subplot row (1-indexed)."""
+    """Return the Plotly yref string for the given subplot row (1-indexed).
+
+    :param row: 1-indexed subplot row number.
+    :type row: int
+    :returns: Plotly ``yref`` domain string for the row.
+    :rtype: str
+    """
     return "y domain" if row == 1 else f"y{row} domain"
 
 
@@ -83,6 +120,21 @@ def _add_event_bands(fig, events, rows, show_label=True, label_row=1, opacity=0.
     All shapes and annotations are added in a single ``update_layout`` call
     (batched) rather than one ``add_vrect`` / ``add_annotation`` call per event,
     which eliminates the per-call layout-mutation overhead.
+
+    :param fig: Figure to annotate in place.
+    :type fig: plotly.graph_objects.Figure
+    :param events: Events to shade.
+    :type events: list[EventRecord]
+    :param rows: Subplot rows (1-indexed) to add the bands to.
+    :type rows: list[int]
+    :param show_label: Whether to add ``E{id}`` labels above each band.
+    :type show_label: bool
+    :param label_row: Subplot row used to anchor labels.
+    :type label_row: int
+    :param opacity: Fill opacity for the event bands.
+    :type opacity: float
+    :returns: ``None``; *fig* is modified in place.
+    :rtype: None
     """
     if not events:
         return
@@ -130,6 +182,19 @@ def plot_rainfall_flow_with_events(
     """Two-panel timeseries: top = inverted rainfall bars, bottom = stormflow.
 
     Transparent colored bands highlight each event on both panels.
+
+    :param rain_stormflow: Frame with ``datetime``, ``rain``, ``stormflow``.
+    :type rain_stormflow: pandas.DataFrame
+    :param events: Detected events to highlight.
+    :type events: list[EventRecord]
+    :param title: Figure title.
+    :type title: str
+    :param rain_label: Y-axis label for the rainfall panel.
+    :type rain_label: str
+    :param flow_label: Y-axis label for the stormflow panel.
+    :type flow_label: str
+    :returns: Two-row Plotly Figure with rainfall and stormflow panels.
+    :rtype: plotly.graph_objects.Figure
     """
     df = rain_stormflow.copy()
     df["datetime"] = pd.to_datetime(df["datetime"])
@@ -185,7 +250,16 @@ def plot_filter_signals(
     filter_result: FilterResult,
     title: str = "Savitzky-Golay Filter Signals",
 ) -> go.Figure:
-    """Three-panel figure: sg_0, sg_1, sg_2 with threshold lines."""
+    """Three-panel figure: sg_0, sg_1, sg_2 with threshold lines.
+
+    :param filter_result: Savitzky-Golay filter output with signals and
+        thresholds.
+    :type filter_result: FilterResult
+    :param title: Figure title.
+    :type title: str
+    :returns: Three-row Plotly Figure of the smoothed signal and derivatives.
+    :rtype: plotly.graph_objects.Figure
+    """
     t = filter_result.datetime
     ths = filter_result.thresholds
     sg_0_th = ths.get("sg_0_th", 0.0)
@@ -232,7 +306,17 @@ def plot_event_detection(
     events: list[EventRecord],
     title: str = "Event Detection — sg_0 with Detected Events",
 ) -> go.Figure:
-    """Single panel: sg_0 + peak markers + event shading."""
+    """Single panel: sg_0 + peak markers + event shading.
+
+    :param filter_result: Savitzky-Golay filter output with the sg_0 signal.
+    :type filter_result: FilterResult
+    :param events: Detected events to mark and shade.
+    :type events: list[EventRecord]
+    :param title: Figure title.
+    :type title: str
+    :returns: Single-panel Plotly Figure of sg_0 with event markers.
+    :rtype: plotly.graph_objects.Figure
+    """
     t = filter_result.datetime
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=t, y=filter_result.sg_0, mode="lines",
@@ -290,7 +374,19 @@ def plot_sequential_fit(
     events: list[EventRecord] | None = None,
     title: str = "Sequential Unit Hydrograph Fitting",
 ) -> go.Figure:
-    """Three-row panel: rainfall / observed+predicted / residual."""
+    """Three-row panel: rainfall / observed+predicted / residual.
+
+    :param summary: Sequential fitting summary.
+    :type summary: SequentialFitSummary
+    :param rain_stormflow: Frame with ``datetime``, ``rain``, ``stormflow``.
+    :type rain_stormflow: pandas.DataFrame
+    :param events: Events to overlay; defaults to ``summary.events``.
+    :type events: list[EventRecord] | None
+    :param title: Figure title.
+    :type title: str
+    :returns: Three-row Plotly Figure with rainfall, flow, and residual panels.
+    :rtype: plotly.graph_objects.Figure
+    """
     if events is None:
         events = summary.events
 
@@ -394,7 +490,15 @@ def plot_parameter_evolution(
     summary: SequentialFitSummary,
     title: str = "Parameter Evolution Across Fitted Events",
 ) -> go.Figure:
-    """One subplot per shape parameter, colored by NSE with rolling mean."""
+    """One subplot per shape parameter, colored by NSE with rolling mean.
+
+    :param summary: Sequential fitting summary.
+    :type summary: SequentialFitSummary
+    :param title: Figure title.
+    :type title: str
+    :returns: Plotly Figure with one subplot per shape parameter.
+    :rtype: plotly.graph_objects.Figure
+    """
     if not summary.calibration_results:
         return go.Figure().update_layout(title=title)
 
@@ -461,20 +565,20 @@ def plot_effective_area(
 ) -> go.Figure:
     """Bar chart comparing observed, fitted, and calibrated effective area per event.
 
-    Parameters
-    ----------
-    events : list[EventRecord]
-        Source of observed Ae and event duration.
-    fitted_areas : list[float], optional
-        Integrated fitted Ae = ``sum(Q_pred)/sum(rain)`` per event
-        (:attr:`SequentialFitSummary.fitted_effective_areas`).
-    calibrated_areas : list[float], optional
-        Direct calibrated ``A`` parameter per event
-        (:meth:`SequentialFitSummary.calibrated_areas`).
-        For single models this is the ``A`` value; for ensembles it is the sum
-        of all component ``*_A`` parameters.
-    title : str, optional
-        Auto-generated when omitted.
+    :param events: Source of observed Ae and event duration.
+    :type events: list[EventRecord]
+    :param fitted_areas: Integrated fitted Ae = ``sum(Q_pred)/sum(rain)`` per
+        event (:attr:`SequentialFitSummary.fitted_effective_areas`).
+    :type fitted_areas: list[float] | None
+    :param calibrated_areas: Direct calibrated ``A`` parameter per event
+        (:meth:`SequentialFitSummary.calibrated_areas`).  For single models this
+        is the ``A`` value; for ensembles it is the sum of all component ``*_A``
+        parameters.
+    :type calibrated_areas: list[float] | None
+    :param title: Figure title; auto-generated when omitted.
+    :type title: str | None
+    :returns: Plotly bar-chart Figure of effective area per event.
+    :rtype: plotly.graph_objects.Figure
     """
     if not events:
         return go.Figure().update_layout(title=title or "Effective Area (no events)")

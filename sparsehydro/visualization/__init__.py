@@ -133,7 +133,7 @@ except ImportError:
     def plot_ensemble_components(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_ensemble_components. Install with: pip install plotly")
 
-    from ..interfaces import IModel as _IModel  # noqa: E402
+    from ..models import IModel as _IModel  # noqa: E402
 
     class VisualizationModel(_IModel):  # type: ignore[no-redef]
         model_name = "visualization"

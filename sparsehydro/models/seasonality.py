@@ -62,9 +62,13 @@ class SeasonalityModel(IModel):
     dimension weights are constrained to sum to 1.
 
     :param include_hour: Include hour-of-day (24 bins) dimension.
+    :type include_hour: bool
     :param include_dow: Include day-of-week (7 bins, Monday=0) dimension.
+    :type include_dow: bool
     :param include_month: Include month-of-year (12 bins, January=0) dimension.
+    :type include_month: bool
     :param output_name: Column name for model output in :meth:`predict` results.
+    :type output_name: str
 
     Total calibratable parameters:
         - 1 baseline
@@ -199,6 +203,7 @@ class SeasonalityModel(IModel):
         """Extract and cache time indices from the datetime column.
 
         :param data: DataFrame containing a ``datetime`` column.
+        :type data: pandas.DataFrame
         :raises KeyError: If the ``datetime`` column is missing.
         """
         df = data
@@ -258,6 +263,9 @@ class SeasonalityModel(IModel):
 
         Returns ``[sum(w) - 1.0, 1.0 - sum(w)]``.
         Both ≤ 0 enforces sum(w) == 1.
+
+        :returns: Two-element list ``[Σw - 1, 1 - Σw]``.
+        :rtype: list[float]
         """
         active_dims = self._active_dims()
         w_sum = sum(self.get_scalar_parameter(f"w_{d}").value for d in active_dims)
@@ -292,7 +300,11 @@ class SeasonalityModel(IModel):
     # ------------------------------------------------------------------
 
     def _active_dims(self) -> list[str]:
-        """Return list of active dimension keys in canonical order."""
+        """Return list of active dimension keys in canonical order.
+
+        :returns: Active dimension keys among ``"hour"``, ``"dow"``, ``"month"``.
+        :rtype: list[str]
+        """
         dims = []
         if self._include_hour:
             dims.append("hour")

@@ -59,6 +59,19 @@ class IObjective(ABC):
     name: ClassVar[str]
     minimize: ClassVar[bool]
 
+    def __init__(self, mask: np.ndarray | None = None) -> None:
+        """Store an optional per-objective boolean mask.
+
+        :param mask: Boolean array selecting the timesteps this objective is
+            computed over.  Applied by :meth:`compute` unless overridden by an
+            explicit ``mask`` argument.  ``None`` (default) uses all values.
+            Column-name / callable mask specifications are resolved by
+            :class:`~sparsehydro.calibration.problem.CalibrationProblem`, not
+            here — pass a boolean array when using an objective standalone.
+        :type mask: numpy.ndarray or None
+        """
+        self.mask = mask
+
     @abstractmethod
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
         """Compute a scalar score from observed and predicted arrays.
@@ -79,34 +92,60 @@ class IObjective(ABC):
         predicted: np.ndarray,
         mask: np.ndarray | None = None,
     ) -> float:
-        """Evaluate the objective, optionally restricting to a subset of steps.
+        """Evaluate the objective over a selected subset of timesteps.
+
+        Positions where ``observed`` or ``predicted`` is ``NaN`` are **always**
+        excluded, in addition to any boolean mask.  The *effective* mask is the
+        explicit ``mask`` argument when supplied, otherwise the objective's own
+        :attr:`mask` (an explicit argument wins — this lets
+        :class:`~sparsehydro.calibration.problem.CalibrationProblem` apply a
+        problem-level default while honouring per-objective overrides).
 
         :param observed: 1-D array of observed values.
         :type observed: numpy.ndarray
         :param predicted: 1-D array of predicted values (same shape).
         :type predicted: numpy.ndarray
         :param mask: Boolean array of the same length as *observed*.  Only
-            positions where ``mask`` is ``True`` are included in the
-            computation.  ``None`` (default) uses all values.
+            positions where ``mask`` is ``True`` are included.  ``None``
+            (default) falls back to :attr:`mask`.
         :type mask: numpy.ndarray or None
         :returns: Scalar objective value computed over the selected subset.
         :rtype: float
-        :raises ValueError: If *mask* length does not match *observed*, or if
-            all mask values are ``False`` (empty subset).
+        :raises TypeError: If the effective mask is a column name or callable
+            (those must be resolved via ``CalibrationProblem``).
+        :raises ValueError: If the mask length does not match *observed*, or if
+            no elements remain after masking and NaN removal.
         """
         obs = np.asarray(observed, dtype=float)
         pred = np.asarray(predicted, dtype=float)
-        if mask is not None:
-            m = np.asarray(mask, dtype=bool)
+        if obs.shape != pred.shape:
+            raise ValueError(
+                f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}"
+            )
+
+        effective = mask if mask is not None else self.mask
+
+        # Always drop NaN positions in either series.
+        selector = ~(np.isnan(obs) | np.isnan(pred))
+
+        if effective is not None:
+            if isinstance(effective, str) or callable(effective):
+                raise TypeError(
+                    "A column-name or callable mask cannot be applied directly; "
+                    "resolve it through CalibrationProblem, or pass a boolean array."
+                )
+            m = np.asarray(effective, dtype=bool)
             if m.shape != obs.shape:
                 raise ValueError(
                     f"mask shape {m.shape} does not match observed shape {obs.shape}"
                 )
-            if not m.any():
-                raise ValueError("mask selects no elements; cannot compute objective.")
-            obs = obs[m]
-            pred = pred[m]
-        return self.evaluate(obs, pred)
+            selector &= m
+
+        if not selector.any():
+            raise ValueError(
+                "mask (and NaN removal) selects no elements; cannot compute objective."
+            )
+        return self.evaluate(obs[selector], pred[selector])
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +229,7 @@ class PeakWeightedMSE(IObjective):
     focus on peaks.  ``power=0.0`` reduces to plain MSE.
 
     :param power: Exponent applied to the normalised-flow weights (>= 0).
+    :param mask: Optional boolean array selecting the timesteps to score over.
     :cvar name: ``"peak_weighted_mse"``
     :cvar minimize: ``True``
     """
@@ -197,7 +237,8 @@ class PeakWeightedMSE(IObjective):
     name = "peak_weighted_mse"
     minimize = True
 
-    def __init__(self, power: float = 1.0) -> None:
+    def __init__(self, power: float = 1.0, mask: np.ndarray | None = None) -> None:
+        super().__init__(mask=mask)
         if power < 0.0:
             raise ValueError(f"power must be >= 0; got {power!r}")
         self.power = float(power)
@@ -339,6 +380,7 @@ class LogNSE(IObjective):
     :param epsilon: Offset added before the log transform to avoid
         ``log(0)``.  Default ``0.01``.
     :type epsilon: float
+    :param mask: Optional boolean array selecting the timesteps to score over.
     :cvar name: ``"log_nse"``
     :cvar minimize: ``False``
     """
@@ -346,7 +388,8 @@ class LogNSE(IObjective):
     name = "log_nse"
     minimize = False
 
-    def __init__(self, epsilon: float = 0.01) -> None:
+    def __init__(self, epsilon: float = 0.01, mask: np.ndarray | None = None) -> None:
+        super().__init__(mask=mask)
         self.epsilon = epsilon
 
     def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
@@ -414,6 +457,18 @@ def _peak_weighted_mse(
     predicted: np.ndarray,
     power: float = 1.0,
 ) -> float:
+    """Compute the peak-weighted mean squared error.
+
+    :param observed: 1-D array of observed values.
+    :type observed: numpy.ndarray
+    :param predicted: 1-D array of predicted values (same shape).
+    :type predicted: numpy.ndarray
+    :param power: Exponent applied to the normalised-flow weights (>= 0).
+    :type power: float
+    :returns: Peak-weighted MSE.
+    :rtype: float
+    :raises ValueError: If shapes mismatch, *power* < 0, or observed is all zeros.
+    """
     obs = np.asarray(observed, dtype=float)
     pred = np.asarray(predicted, dtype=float)
     if obs.shape != pred.shape:
@@ -431,6 +486,16 @@ def _peak_weighted_mse(
 
 
 def _nash_sutcliffe(observed: np.ndarray, predicted: np.ndarray) -> float:
+    """Compute the Nash-Sutcliffe efficiency.
+
+    :param observed: 1-D array of observed values.
+    :type observed: numpy.ndarray
+    :param predicted: 1-D array of predicted values (same shape).
+    :type predicted: numpy.ndarray
+    :returns: Nash-Sutcliffe efficiency (1 is perfect).
+    :rtype: float
+    :raises ValueError: If shapes mismatch or the observed series is constant.
+    """
     obs = np.asarray(observed, dtype=float)
     pred = np.asarray(predicted, dtype=float)
     if obs.shape != pred.shape:
@@ -443,6 +508,16 @@ def _nash_sutcliffe(observed: np.ndarray, predicted: np.ndarray) -> float:
 
 
 def _pbias(observed: np.ndarray, predicted: np.ndarray) -> float:
+    """Compute the absolute percent bias.
+
+    :param observed: 1-D array of observed values.
+    :type observed: numpy.ndarray
+    :param predicted: 1-D array of predicted values (same shape).
+    :type predicted: numpy.ndarray
+    :returns: Absolute percent bias (0 is perfect).
+    :rtype: float
+    :raises ValueError: If shapes mismatch or ``sum(observed)`` is zero.
+    """
     obs = np.asarray(observed, dtype=float)
     pred = np.asarray(predicted, dtype=float)
     if obs.shape != pred.shape:
@@ -458,6 +533,19 @@ def _log_nse(
     predicted: np.ndarray,
     epsilon: float = 0.01,
 ) -> float:
+    """Compute the Nash-Sutcliffe efficiency on log-transformed flows.
+
+    :param observed: 1-D array of observed values.
+    :type observed: numpy.ndarray
+    :param predicted: 1-D array of predicted values (same shape).
+    :type predicted: numpy.ndarray
+    :param epsilon: Offset added before the log transform to avoid ``log(0)``.
+    :type epsilon: float
+    :returns: Log-space Nash-Sutcliffe efficiency (1 is perfect).
+    :rtype: float
+    :raises ValueError: If shapes mismatch, *epsilon* <= 0, or the
+        log-transformed observed series is constant.
+    """
     obs = np.asarray(observed, dtype=float)
     pred = np.asarray(predicted, dtype=float)
     if obs.shape != pred.shape:
@@ -474,6 +562,16 @@ def _log_nse(
 
 
 def _volume_relative_error(observed: np.ndarray, predicted: np.ndarray) -> float:
+    """Compute the relative total volume error.
+
+    :param observed: 1-D array of observed values.
+    :type observed: numpy.ndarray
+    :param predicted: 1-D array of predicted values (same shape).
+    :type predicted: numpy.ndarray
+    :returns: Absolute relative volume error (0 is perfect).
+    :rtype: float
+    :raises ValueError: If shapes mismatch or ``sum(observed)`` is zero.
+    """
     obs = np.asarray(observed, dtype=float)
     pred = np.asarray(predicted, dtype=float)
     if obs.shape != pred.shape:
@@ -485,6 +583,16 @@ def _volume_relative_error(observed: np.ndarray, predicted: np.ndarray) -> float
 
 
 def _concordance_correlation_coefficient(observed: np.ndarray, predicted: np.ndarray) -> float:
+    """Compute Lin's concordance correlation coefficient.
+
+    :param observed: 1-D array of observed values.
+    :type observed: numpy.ndarray
+    :param predicted: 1-D array of predicted values (same shape).
+    :type predicted: numpy.ndarray
+    :returns: Concordance correlation coefficient in [-1, 1] (1 is perfect).
+    :rtype: float
+    :raises ValueError: If shapes mismatch or the denominator is zero.
+    """
     obs = np.asarray(observed, dtype=float)
     pred = np.asarray(predicted, dtype=float)
     if obs.shape != pred.shape:
@@ -501,6 +609,16 @@ def _concordance_correlation_coefficient(observed: np.ndarray, predicted: np.nda
 
 
 def _index_of_agreement(observed: np.ndarray, predicted: np.ndarray) -> float:
+    """Compute Willmott's index of agreement.
+
+    :param observed: 1-D array of observed values.
+    :type observed: numpy.ndarray
+    :param predicted: 1-D array of predicted values (same shape).
+    :type predicted: numpy.ndarray
+    :returns: Index of agreement in [0, 1] (1 is perfect).
+    :rtype: float
+    :raises ValueError: If shapes mismatch or the potential error is zero.
+    """
     obs = np.asarray(observed, dtype=float)
     pred = np.asarray(predicted, dtype=float)
     if obs.shape != pred.shape:

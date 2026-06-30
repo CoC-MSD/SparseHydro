@@ -103,11 +103,18 @@ try:
         :attr:`~sparsehydro.calibration.result.CalibrationResult.pareto_F`.
 
         :param pop_size: Population size per generation.
+        :type pop_size: int
         :param n_gen: Total number of generations.
+        :type n_gen: int
         :param seed: Random seed for reproducibility (``None`` for random).
+        :type seed: int or None
         :param verbose: Print pymoo progress output.
+        :type verbose: bool
         :param n_jobs: Parallel workers via ``ProcessPoolExecutor``
             (``1`` = sequential).
+        :type n_jobs: int
+        :param callback: Optional progress callback invoked once per generation.
+        :type callback: Callable or None
         """
 
         def __init__(
@@ -130,6 +137,7 @@ try:
             """Run NSGA-II and return a :class:`~sparsehydro.calibration.result.CalibrationResult`.
 
             :param problem: Calibration problem wrapping model + data + objectives.
+            :type problem: CalibrationProblem
             :param kwargs: Per-call overrides: ``pop_size``, ``n_gen``, ``seed``,
                 ``verbose``, ``n_jobs``, ``callback``.
             :returns: Result with per-generation history and final Pareto front.

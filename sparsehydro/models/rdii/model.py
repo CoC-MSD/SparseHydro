@@ -126,7 +126,11 @@ class RDIIModel(IModel):
 
     @property
     def n_components(self) -> int:
-        """Number of unit hydrograph components."""
+        """Number of unit hydrograph components.
+
+        :returns: Count of registered UH components.
+        :rtype: int
+        """
         return len(self._uh_components)
 
     # ------------------------------------------------------------------
@@ -139,6 +143,9 @@ class RDIIModel(IModel):
         Registers ``area_acres``, ``R_1 … R_N`` (composite fractions), all
         IA model parameters (original names), and all UH shape parameters
         (``uh{i}_{name}`` prefix, excluding each component's amplitude param).
+
+        :returns: Nothing.
+        :rtype: None
         """
         self._ia_model.initialize()
         for uh in self._uh_components:
@@ -345,7 +352,11 @@ class RDIIModel(IModel):
         return result
 
     def finalize(self) -> None:
-        """Release stored data and advance to FINALIZED."""
+        """Release stored data and advance to FINALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         self._prepared_df = None
         self._state = ModelState.FINALIZED
 
@@ -358,6 +369,9 @@ class RDIIModel(IModel):
 
         Returns ``[Σ R_i - 1.0, ia_T_freeze - ia_T_ref]``.
         A value ≤ 0 means feasible.
+
+        :returns: Two-element list ``[Σ R_i - 1, ia_T_freeze - ia_T_ref]``.
+        :rtype: list[float]
         """
         R_sum = sum(
             self.get_scalar_parameter(f"R_{i}").value
@@ -372,7 +386,11 @@ class RDIIModel(IModel):
     # ------------------------------------------------------------------
 
     def _sync_to_submodels(self) -> None:
-        """Push composite registry values to sub-model registries."""
+        """Push composite registry values to sub-model registries.
+
+        :returns: Nothing.
+        :rtype: None
+        """
         for ia_name, composite_name in self._ia_param_name_map.items():
             if composite_name in self._scalar_parameters:
                 try:
@@ -403,7 +421,17 @@ class RDIIModel(IModel):
                     pass
 
     def rename_scalar_parameter(self, old_name: str, new_name: str) -> None:
-        """Rename a scalar parameter and keep internal sync maps up to date."""
+        """Rename a scalar parameter and keep internal sync maps up to date.
+
+        :param old_name: Current name of the parameter.
+        :type old_name: str
+        :param new_name: New name to assign to the parameter.
+        :type new_name: str
+        :returns: Nothing.
+        :rtype: None
+        :raises ValueError: If a parameter named *new_name* already exists.
+        :raises KeyError: If no parameter named *old_name* is registered.
+        """
         super().rename_scalar_parameter(old_name, new_name)
         for ia_name, composite in self._ia_param_name_map.items():
             if composite == old_name:
@@ -417,7 +445,13 @@ class RDIIModel(IModel):
 
 
 def _amplitude_default(uh: IUnitHydroComponent) -> float:
-    """Return the default R value from the component's amplitude parameter, else 0.05."""
+    """Return the default R value from the component's amplitude parameter, else 0.05.
+
+    :param uh: Unit hydrograph component to inspect.
+    :type uh: IUnitHydroComponent
+    :returns: The component's amplitude parameter value, or ``0.05`` if absent.
+    :rtype: float
+    """
     amp = type(uh)._amplitude_param_name
     if amp:
         try:

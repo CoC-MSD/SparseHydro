@@ -68,14 +68,19 @@ class EnsembleModel(IModel):
     :param components: List of ``(model, extractor)`` pairs.  ``extractor`` is a
         callable ``(predict_df: pandas.DataFrame) → numpy.ndarray`` that selects
         the scalar output array from each child's ``predict()`` result.
+    :type components: list[tuple[IModel, Callable]]
     :param mode: Combination mode.  ``"sum"`` computes ``Σ w_i · y_i``; ``"product"``
         computes ``Π y_i^w_i``.  Defaults to ``"sum"``.
+    :type mode: str
     :param aliases: Optional label for each component used as a parameter prefix.
         Defaults to ``"model_1"``, ``"model_2"``, …
+    :type aliases: list[str] | None
     :param output_name: Column name for the combined output in ``predict()`` output.
         Defaults to ``"ensemble_output"``.
+    :type output_name: str
     :param normalize_weights: If ``True`` (default) and ``mode="sum"``, a
         ``sum_w_leq_1`` constraint ``Σ w_i ≤ 1.0`` is registered.
+    :type normalize_weights: bool
     """
 
     model_name = "ensemble"
@@ -215,14 +220,29 @@ class EnsembleModel(IModel):
         return True
 
     def prepare(self, data: Any, **kwargs: Any) -> None:
-        """Sync ensemble parameters to children then call ``prepare(data)`` on each."""
+        """Sync ensemble parameters to children then call ``prepare(data)`` on each.
+
+        :param data: Forcing data forwarded unchanged to every child model.
+        :type data: Any
+        :param kwargs: Additional keyword arguments forwarded to each child's
+            ``prepare``.
+        :type kwargs: Any
+        :returns: Nothing.
+        :rtype: None
+        """
         self._sync_to_children()
         for child in self._children:
             child.prepare(data, **kwargs)
         self._state = ModelState.PREPARED
 
     def predict(self) -> pd.DataFrame:
-        """Sync parameters, run each child, and return the combined output."""
+        """Sync parameters, run each child, and return the combined output.
+
+        :returns: DataFrame with a ``datetime`` column (when available), one
+            ``{alias}_output`` column per component, and the combined
+            ``{output_name}`` column.
+        :rtype: pandas.DataFrame
+        """
         self._sync_to_children()
 
         n = len(self._children)
@@ -264,7 +284,12 @@ class EnsembleModel(IModel):
         self._state = ModelState.FINALIZED
 
     def inequality_constraints(self) -> list[float]:
-        """Concatenate child constraint residuals, then append ensemble-level constraints."""
+        """Concatenate child constraint residuals, then append ensemble-level constraints.
+
+        :returns: All child constraint residuals followed by the optional
+            ``Σ w_i - 1`` ensemble weight-normalisation residual.
+        :rtype: list[float]
+        """
         g: list[float] = []
         for child in self._children:
             g.extend(child.inequality_constraints())
@@ -281,7 +306,13 @@ class EnsembleModel(IModel):
     # ------------------------------------------------------------------
 
     def parameter_table(self) -> pd.DataFrame:
-        """Return a DataFrame summarising every registered scalar parameter."""
+        """Return a DataFrame summarising every registered scalar parameter.
+
+        :returns: One row per scalar parameter with ``parameter``, ``group``,
+            ``value``, ``lower_bound``, ``upper_bound``, ``units``,
+            ``calibrate`` and ``description`` columns.
+        :rtype: pandas.DataFrame
+        """
         rows = []
         for name in self.scalar_parameter_names:
             p = self.get_scalar_parameter(name)
@@ -306,7 +337,22 @@ class EnsembleModel(IModel):
         upper_bound: float | None = None,
         calibrate: bool | None = None,
     ) -> None:
-        """Update a parameter's value and/or bounds in-place."""
+        """Update a parameter's value and/or bounds in-place.
+
+        :param name: Name of the registered scalar parameter to update.
+        :type name: str
+        :param value: New parameter value, or ``None`` to leave unchanged.
+        :type value: float | None
+        :param lower_bound: New lower bound, or ``None`` to leave unchanged.
+        :type lower_bound: float | None
+        :param upper_bound: New upper bound, or ``None`` to leave unchanged.
+        :type upper_bound: float | None
+        :param calibrate: New calibration flag, or ``None`` to leave unchanged.
+        :type calibrate: bool | None
+        :returns: Nothing.
+        :rtype: None
+        :raises KeyError: If no scalar parameter named *name* is registered.
+        """
         self.get_scalar_parameter(name).update(
             value=value,
             lower_bound=lower_bound,
@@ -321,7 +367,25 @@ class EnsembleModel(IModel):
         output_col: str | None = None,
         **prepare_kwargs: Any,
     ) -> np.ndarray:
-        """Apply every Pareto-front solution and return their combined outputs."""
+        """Apply every Pareto-front solution and return their combined outputs.
+
+        Iterates over each parameter vector on the Pareto front, runs the full
+        :meth:`prepare`/:meth:`predict` cycle, and stacks the resulting output
+        series.  The model's parameter values are restored afterwards.
+
+        :param data: Forcing data forwarded to :meth:`prepare`.
+        :type data: Any
+        :param result: Calibration result exposing ``param_names`` and
+            ``pareto_X`` (the Pareto-front parameter vectors).
+        :type result: Any
+        :param output_col: Output column to extract; defaults to the ensemble
+            ``output_name``.
+        :type output_col: str | None
+        :param prepare_kwargs: Extra keyword arguments forwarded to :meth:`prepare`.
+        :type prepare_kwargs: Any
+        :returns: Array of shape ``(n_pareto, n_timesteps)`` of combined outputs.
+        :rtype: numpy.ndarray
+        """
         if output_col is None:
             output_col = self._output_name
 
