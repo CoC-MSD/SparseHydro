@@ -19,11 +19,24 @@ names so that a single import covers the essential API:
 .. code-block:: python
 
    from sparsehydro import (
+       # Core
        IModel, ModelState, ScalarParameter,
+       # Stormflow preprocessing
+       FilterResult, apply_savgol_filter, compute_thresholds,
+       # Event detection
+       EventRecord, detect_events, events_to_dataframe, load_events_from_csv,
+       # Unit hydrograph models + sequential fitting
+       GammaUH, NashUH, TriangleUH,
+       SequentialFitter, SequentialFitSummary,
+       # Calibration
        CalibrationProblem, CalibrationResult,
        MSE, RMSE, NashSutcliffe, KGE, PeakWeightedMSE,
        NSGAIISolver, ScipySolver, PlatypusSolver, ParticleSwarmSolver,
-       plot_timeseries, plot_calibration_timeseries, plot_calibration_dashboard,
+       # Visualisation
+       plot_timeseries, plot_calibration_dashboard,
+       plot_rainfall_flow_with_events, plot_filter_signals,
+       plot_event_detection, plot_sequential_fit,
+       plot_parameter_evolution, plot_effective_area,
    )
 
 .. automodule:: sparsehydro
@@ -140,6 +153,88 @@ Calibration Dashboard
    :members:
    :show-inheritance:
 
+Unit Hydrograph Plots
+~~~~~~~~~~~~~~~~~~~~~
+
+Six interactive Plotly figures for the sequential UH fitting workflow.
+All functions return :class:`plotly.graph_objects.Figure` and are importable
+directly from :mod:`sparsehydro.visualization` or the top-level namespace.
+
++--------------------------------------------------+----------------------------------------------------+
+| Function                                         | Description                                        |
++==================================================+====================================================+
+| :func:`plot_rainfall_flow_with_events`           | Two-panel timeseries with event shading bands      |
++--------------------------------------------------+----------------------------------------------------+
+| :func:`plot_filter_signals`                      | sg_0 / sg_1 / sg_2 with threshold lines           |
++--------------------------------------------------+----------------------------------------------------+
+| :func:`plot_event_detection`                     | sg_0 + peak markers + event shading               |
++--------------------------------------------------+----------------------------------------------------+
+| :func:`plot_sequential_fit`                      | Rainfall / obs+pred / residual three-row panel     |
++--------------------------------------------------+----------------------------------------------------+
+| :func:`plot_parameter_evolution`                 | Fitted params over time, colored by NSE            |
++--------------------------------------------------+----------------------------------------------------+
+| :func:`plot_effective_area`                      | Bar chart of effective area per event              |
++--------------------------------------------------+----------------------------------------------------+
+
+.. automodule:: sparsehydro.visualization.unithydrograph
+   :members:
+   :show-inheritance:
+
+----
+
+Stormflow Analysis
+------------------
+
+Savitzky-Golay filtering and derivative-based event detection used by the
+sequential UH fitting workflow.
+
+Filters
+~~~~~~~
+
+``apply_savgol_filter`` produces three aligned signals from a raw stormflow
+series.  ``compute_thresholds`` attaches percentile-based detection thresholds
+in a single immutable update step.
+
+.. code-block:: python
+
+   from sparsehydro import apply_savgol_filter, compute_thresholds
+
+   fr = apply_savgol_filter(rain_stormflow_df, window_length=48)
+   fr = compute_thresholds(fr, sg_0_per=0.15, sg_1_per=0.25, sg_2_per=0.25)
+   print(fr.thresholds)   # {'sg_0_th': ..., 'sg_1_th': ..., 'sg_2_th': ...}
+
+.. automodule:: sparsehydro.filters
+   :members:
+   :show-inheritance:
+
+Event Detection
+~~~~~~~~~~~~~~~
+
+``detect_events`` uses ``scipy.signal.find_peaks`` on the smoothed signal to
+identify storm peaks, then walks backward and forward using derivative signals
+to bound each event.  Overlapping events are merged or split at the trough.
+
+.. note::
+
+   ``height_perc``, ``prom_perc``, and ``width_perc`` are **percentile values
+   in the 0–100 range** (not fractions).
+
+.. code-block:: python
+
+   from sparsehydro import detect_events, events_to_dataframe
+
+   events, filter_result = detect_events(
+       rain_stormflow_df,
+       height_perc=25.0,
+       prom_perc=25.0,
+       width_perc=10.0,
+   )
+   print(events_to_dataframe(events))
+
+.. automodule:: sparsehydro.events
+   :members:
+   :show-inheritance:
+
 ----
 
 Unit Hydrograph
@@ -150,8 +245,83 @@ Unit Hydrograph
    :show-inheritance:
    :noindex:
 
-Adapter
-~~~~~~~
+Native UH Models
+~~~~~~~~~~~~~~~~
+
+Three self-contained :class:`~sparsehydro.interfaces.IUnitHydroComponent`
+implementations that follow the full SparseHydro lifecycle.  All return a
+:class:`~pandas.DataFrame` with a ``"Q_pred"`` column so the same
+``column_map`` works for single models and
+:class:`~sparsehydro.ensemble.EnsembleModel` composites.
+
+**Kernel normalisation:** ``sum(kernel) * dt_hours ≈ 1.0``
+
+**Convolution:** ``Q = convolve(rain, kernel * A * dt)[:n]``
+where ``A`` is the effective area ratio (stormflow / rain volume).
+
++----------------------+-----------------------------------+---------------------------------------+
+| Class                | Parameters                        | Kernel shape                          |
++======================+===================================+=======================================+
+| :class:`GammaUH`     | A, tt (shape), tp (scale/steps)   | ``(t/tp)^tt · exp(-t/tp)``, normalised|
++----------------------+-----------------------------------+---------------------------------------+
+| :class:`NashUH`      | A, n (reservoirs), k (storage)    | ``t^(n-1) · exp(-t/k) / (k^n Γ(n))`` |
++----------------------+-----------------------------------+---------------------------------------+
+| :class:`TriangleUH`  | A, tt (total steps), tp (peak)    | Piecewise linear; ``tp < tt``         |
++----------------------+-----------------------------------+---------------------------------------+
+
+.. automodule:: sparsehydro.unithydrograph.models
+   :members:
+   :show-inheritance:
+
+Sequential Fitting
+~~~~~~~~~~~~~~~~~~
+
+:class:`~sparsehydro.unithydrograph.sequential.SequentialFitter` fits a fresh
+model instance to each storm event in chronological order, warm-starting from
+the previous event's calibrated parameters.  The predicted flow from each
+fitted event is subtracted from the observed signal before the next event is
+fitted (residual approach).
+
+The ``model_factory`` argument is a zero-argument callable that returns a
+fresh :class:`~sparsehydro.interfaces.IModel` — this works for both single
+UH models and :class:`~sparsehydro.ensemble.EnsembleModel` composites:
+
+.. code-block:: python
+
+   from sparsehydro import GammaUH, SequentialFitter
+   from sparsehydro.ensemble import EnsembleModel
+
+   # Single model
+   fitter = SequentialFitter(lambda: GammaUH(), rain_stormflow_df, events)
+
+   # Two-component ensemble
+   def make_ensemble():
+       fast = GammaUH(A=80.0, tt=1.5, tp=3.0)
+       slow = GammaUH(A=30.0, tt=3.0, tp=20.0)
+       ens = EnsembleModel(
+           components=[(fast, lambda p: p["Q_pred"].to_numpy()),
+                       (slow, lambda p: p["Q_pred"].to_numpy())],
+           mode="sum", aliases=["fast", "slow"],
+           output_name="Q_pred", normalize_weights=False,
+       )
+       ens.initialize()
+       ens.set_parameter("w_1", value=1.0, calibrate=False)
+       ens.set_parameter("w_2", value=1.0, calibrate=False)
+       ens.validate()
+       return ens
+
+   fitter = SequentialFitter(make_ensemble, rain_stormflow_df, events)
+   summary = fitter.fit(verbose=True)
+
+   print(summary.metrics_summary())        # RMSE, NSE, KGE per event
+   print(summary.parameter_evolution())    # fitted params per event
+
+.. automodule:: sparsehydro.unithydrograph.sequential
+   :members:
+   :show-inheritance:
+
+Adapter (legacy)
+~~~~~~~~~~~~~~~~
 
 .. automodule:: sparsehydro.unithydrograph.adapter
    :members:
@@ -166,6 +336,11 @@ The :mod:`sparsehydro.rdii` subpackage implements the full physics-based
 Rainfall-Derived Inflow and Infiltration (RDII) modelling chain:
 
 * Temperature-driven Initial Abstraction recovery/depletion (:class:`~sparsehydro.rdii.initial_abstraction.IAModel`)
+  — the wet step integrates the depletion ODE exactly within each timestep
+  (invariant to sub-step refinement; mass-conserving)
+* Optional degree-day snow model (``IAModel(snow=True)``) — cold-day precipitation
+  is stored as snow-water equivalent and released as melt during warm spells,
+  capturing cold-season melt-driven peak events
 * N triangular RTK unit hydrographs (:class:`~sparsehydro.rdii.rtk_triangle.RTKTriangle`)
 * Configurable composite model mixing any IA model with any number of UH types (:class:`~sparsehydro.rdii.combined_model.CombinedHydroModel`)
 * ``area_acres`` parameter converts depth [mm] → flow [CFS] automatically

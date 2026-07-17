@@ -1,9 +1,8 @@
-"""CombinedHydroModel — configurable IA model + any mix of UH components.
+"""RDIIModel — configurable IA model + any mix of UH components.
 
-Generalises :class:`~sparsehydro.rdii.model.RDIIModel` by accepting *any*
-``IModel``-based initial-abstraction model and *any* list of
-:class:`~sparsehydro.interfaces.IUnitHydroComponent` objects (RTK triangles,
-Nash/Gamma adapters, or custom shapes).
+Combines one :class:`~sparsehydro.models.rdii.IAModel` with *N* configurable
+:class:`~sparsehydro.models.IUnitHydroComponent` objects (RTK triangles, Nash/Gamma
+adapters, or custom shapes).
 
 Parameter naming convention
 ---------------------------
@@ -15,14 +14,15 @@ Parameter naming convention
 
 ``prepare()`` input DataFrame columns
 --------------------------------------
-+------------------+----------+---------------------------+
-| Column           | Required | Notes                     |
-+==================+==========+===========================+
-| ``datetime``     | Yes      | Any pandas DatetimeLike   |
-| ``rainfall_mm``  | Yes      | Depth per step [mm]       |
-| ``flow_cfs``     | No       | Observed flow (optimizer) |
-| ``temperature_c``| No       | Falls back to ``ia_T_ref``|
-+------------------+----------+---------------------------+
++---------------------+----------+---------------------------+
+| Column              | Required | Notes                     |
++=====================+==========+===========================+
+| ``datetime``        | Yes      | Any pandas DatetimeLike   |
+| ``rainfall_in``     | imperial | Depth per step [in]       |
+| ``rainfall_mm``     | metric   | Depth per step [mm]       |
+| ``flow_cfs``        | No       | Observed flow (optimizer) |
+| ``temperature_c``   | No       | Falls back to ``ia_T_ref``|
++---------------------+----------+---------------------------+
 """
 
 from __future__ import annotations
@@ -32,10 +32,10 @@ from typing import Any, ClassVar
 import numpy as np
 import pandas as pd
 
-from ..enums import ModelState
-from ..interfaces import IModel, IUnitHydroComponent
-from ..parameters import ScalarParameter
-from ..registry import registry
+from ...enums import ModelState
+from ..base import IModel, IUnitHydroComponent
+from ...parameters import ConstraintRecord, FieldRecord, ScalarParameter
+from ...registry import registry
 from .initial_abstraction import IAModel
 from .rtk_triangle import RTKTriangle
 
@@ -47,53 +47,66 @@ _DEFAULT_RTK = [
 
 _FFT_THRESHOLD = 500
 _MM_AC_PER_HR_TO_CFS = 43560.0 / (304.8 * 3600.0)
+_IN_AC_PER_HR_TO_CFS = 43560.0 / (12.0 * 3600.0)
 
 
 @registry.register
-class CombinedHydroModel(IModel):
-    """Configurable composite: one IA model + any number and type of UH components.
+class RDIIModel(IModel):
+    """Rainfall-Derived Inflow and Infiltration model.
+
+    Combines one :class:`IAModel` with *N* configurable
+    :class:`~sparsehydro.models.IUnitHydroComponent` instances.  Defaults to the
+    classic three-pathway (fast / medium / slow) RTK parameterization.
 
     :param ia_model: Initial-abstraction model.  Its ``predict()`` must return
-        a DataFrame containing a ``p_excess_mm`` column.  Defaults to
-        :class:`~sparsehydro.rdii.initial_abstraction.IAModel`.
+        a DataFrame containing a ``p_excess_mm`` or ``p_excess_in`` column
+        (depending on *units*).  Defaults to :class:`IAModel`.
     :type ia_model: IModel, optional
     :param uh_components: Unit hydrograph components.  Each must implement
-        :class:`~sparsehydro.interfaces.IUnitHydroComponent`.  Defaults to
-        three :class:`~sparsehydro.rdii.rtk_triangle.RTKTriangle` instances
-        (fast / medium / slow) — the same starting point as
-        ``RDIIModel(n_triangles=3)``.
+        :class:`~sparsehydro.models.IUnitHydroComponent`.  Defaults to three
+        :class:`RTKTriangle` instances (fast / medium / slow).
     :type uh_components: list[IUnitHydroComponent], optional
+    :param units: Unit system — ``"imperial"`` (inches, default) or ``"metric"`` (mm).
+    :type units: str
 
     Usage::
 
-        from sparsehydro.rdii import CombinedHydroModel, IAModel, RTKTriangle
+        from sparsehydro.models.rdii import RDIIModel, IAModel, RTKTriangle
 
-        model = CombinedHydroModel()        # defaults match RDIIModel(n_triangles=3)
+        model = RDIIModel()           # defaults: 1 IAModel + 3 RTKTriangles
         model.initialize()
         model.validate()
         model.prepare(df)
-        result = model.predict()            # datetime, rdii_cfs, rdii_mm, p_excess_mm
+        result = model.predict()      # datetime, rdii_cfs, rdii_mm, p_excess_mm
         model.finalize()
 
         # Mix RTK and Nash UH:
-        from sparsehydro.unithydrograph import register_all_uh_models, create_uh_model
-        register_all_uh_models()
+        from sparsehydro.models.unithydrograph import create_uh_model
         NashUH = create_uh_model("Nash")
-        model2 = CombinedHydroModel(
+        model2 = RDIIModel(
             ia_model=IAModel(),
             uh_components=[RTKTriangle(R=0.05, T=1.0, K=1.5), NashUH()],
         )
     """
 
-    model_name: ClassVar[str] = "combined-hydro"
+    model_name: ClassVar[str] = "rdii"
 
     def __init__(
         self,
         ia_model: IModel | None = None,
         uh_components: list[IUnitHydroComponent] | None = None,
+        units: str = "imperial",
     ) -> None:
         super().__init__()
-        self._ia_model: IModel = ia_model if ia_model is not None else IAModel()
+        if units not in ("imperial", "metric"):
+            raise ValueError(f"units must be 'imperial' or 'metric'; got {units!r}")
+        self._units = units
+        self._rainfall_col = "rainfall_in" if units == "imperial" else "rainfall_mm"
+        self._excess_col = "p_excess_in" if units == "imperial" else "p_excess_mm"
+        self._depth_col = "rdii_in" if units == "imperial" else "rdii_mm"
+        self._depth_to_cfs = _IN_AC_PER_HR_TO_CFS if units == "imperial" else _MM_AC_PER_HR_TO_CFS
+
+        self._ia_model: IModel = ia_model if ia_model is not None else IAModel(units=units)
         if uh_components is None:
             self._uh_components: list[IUnitHydroComponent] = [
                 RTKTriangle(R=R, T=T, K=K) for R, T, K in _DEFAULT_RTK
@@ -104,9 +117,7 @@ class CombinedHydroModel(IModel):
         self._prepared_df: pd.DataFrame | None = None
         self._dt_hours: float = 1.0
 
-        # Populated during initialize(); used for parameter sync
-        self._ia_param_names: list[str] = []
-        # List of {orig_name: composite_name} for each UH component
+        self._ia_param_name_map: dict[str, str] = {}
         self._uh_param_maps: list[dict[str, str]] = []
 
     # ------------------------------------------------------------------
@@ -115,10 +126,7 @@ class CombinedHydroModel(IModel):
 
     @property
     def n_components(self) -> int:
-        """Number of unit hydrograph components.
-
-        :rtype: int
-        """
+        """Number of unit hydrograph components."""
         return len(self._uh_components)
 
     # ------------------------------------------------------------------
@@ -132,15 +140,13 @@ class CombinedHydroModel(IModel):
         IA model parameters (original names), and all UH shape parameters
         (``uh{i}_{name}`` prefix, excluding each component's amplitude param).
         """
-        # Initialize sub-models first so their registries are populated
         self._ia_model.initialize()
         for uh in self._uh_components:
             uh.initialize()
 
-        # --- Own parameters ---
         self.register_scalar_parameter(ScalarParameter(
             "area_acres", value=100.0, lower_bound=0.01, upper_bound=100_000.0,
-            units="acres", description="Drainage area — converts rdii_mm depth to rdii_cfs flow",
+            units="acres", description="Drainage area — converts rdii depth to rdii_cfs flow",
         ))
         for i, uh in enumerate(self._uh_components, 1):
             R_default = _amplitude_default(uh)
@@ -149,16 +155,16 @@ class CombinedHydroModel(IModel):
                 units="-", description=f"Component {i}: fraction of P_excess routed through this UH",
             ))
 
-        # --- IA model parameters (re-registered with original names) ---
-        self._ia_param_names = list(self._ia_model.scalar_parameter_names)
-        for name in self._ia_param_names:
+        self._ia_param_name_map = {
+            name: name for name in self._ia_model.scalar_parameter_names
+        }
+        for name in self._ia_param_name_map:
             p = self._ia_model.get_scalar_parameter(name)
             self.register_scalar_parameter(ScalarParameter(
                 p.name, p.value, p.lower_bound, p.upper_bound,
                 p.units, p.description, p.calibrate,
             ))
 
-        # --- UH shape parameters (prefixed, amplitude param excluded) ---
         self._uh_param_maps = []
         for i, uh in enumerate(self._uh_components, 1):
             amp = type(uh)._amplitude_param_name
@@ -175,14 +181,51 @@ class CombinedHydroModel(IModel):
                 mapping[name] = composite_name
             self._uh_param_maps.append(mapping)
 
+        self.register_inequality_constraint(ConstraintRecord(
+            name="sum_R_leq_1",
+            description=(
+                f"R_1 + … + R_{len(self._uh_components)} ≤ 1.0  "
+                "(total runoff fraction must not exceed 100 %)"
+            ),
+        ))
+        self.register_inequality_constraint(ConstraintRecord(
+            name="T_freeze_lt_T_ref",
+            description=(
+                "ia_T_freeze < ia_T_ref  "
+                "(freeze threshold must be below the reference temperature)"
+            ),
+        ))
+
+        depth_units = "in" if self._units == "imperial" else "mm"
+        self.register_output_field(FieldRecord(
+            name="datetime",
+            description="Simulation time step",
+        ))
+        self.register_output_field(FieldRecord(
+            name="rdii_cfs",
+            units="CFS",
+            description="RDII flow rate — all UH components combined",
+            calibratable=True,
+        ))
+        self.register_output_field(FieldRecord(
+            name=self._depth_col,
+            units=depth_units,
+            description="RDII depth per time step",
+            calibratable=False,
+        ))
+        self.register_output_field(FieldRecord(
+            name=self._excess_col,
+            units=depth_units,
+            description="Rainfall excess depth after initial abstraction",
+            calibratable=False,
+        ))
+
         self._state = ModelState.INITIALIZED
 
     def validate(self) -> bool:
         """Validate all parameters and physical constraints.
 
         Checks ``ia_T_freeze < ia_T_ref`` when both are present.
-        The ``Σ R_i <= 1.0`` constraint is reported via
-        :meth:`inequality_constraints` and enforced by the solver.
 
         :returns: ``True`` if all constraints are satisfied.
         :rtype: bool
@@ -205,12 +248,13 @@ class CombinedHydroModel(IModel):
     def prepare(self, data: pd.DataFrame, **kwargs: Any) -> None:
         """Load input data, infer dt, fill missing temperature, prepare the IA model.
 
-        :param data: DataFrame with columns ``datetime``, ``rainfall_mm``,
-            and optionally ``flow_cfs`` / ``temperature_c``.
+        :param data: DataFrame with columns ``datetime``, ``rainfall_in`` or
+            ``rainfall_mm`` (depending on *units*), and optionally ``flow_cfs``
+            and ``temperature_c``.
         :type data: pandas.DataFrame
         :raises ValueError: If required columns are absent or dt cannot be inferred.
         """
-        required = {"datetime", "rainfall_mm"}
+        required = {"datetime", self._rainfall_col}
         missing = required - set(data.columns)
         if missing:
             raise ValueError(
@@ -218,7 +262,7 @@ class CombinedHydroModel(IModel):
             )
 
         df = data.sort_values("datetime").reset_index(drop=True).copy()
-        df["rainfall_mm"] = df["rainfall_mm"].fillna(0.0).clip(lower=0.0)
+        df[self._rainfall_col] = df[self._rainfall_col].fillna(0.0).clip(lower=0.0)
 
         diffs = df["datetime"].diff().dropna()
         if len(diffs) == 0:
@@ -233,7 +277,6 @@ class CombinedHydroModel(IModel):
                 "Ensure the datetime column is sorted and has a uniform step."
             )
 
-        # Fill missing temperature using ia_T_ref from composite registry
         if "ia_T_ref" in self._scalar_parameters:
             T_ref = self.get_scalar_parameter("ia_T_ref").value
         else:
@@ -245,7 +288,6 @@ class CombinedHydroModel(IModel):
 
         self._prepared_df = df
 
-        # Push current composite param values to sub-models, then prepare IA
         self._sync_to_submodels()
         self._ia_model.prepare(df)
 
@@ -254,12 +296,11 @@ class CombinedHydroModel(IModel):
     def predict(self, *args: Any, **kwargs: Any) -> pd.DataFrame:
         """Compute RDII by convolving P_excess with each UH component.
 
-        Syncs parameter values to sub-models on every call so that parameter
-        changes made by the calibration framework between iterations are
-        picked up automatically.
+        Syncs parameter values to sub-models on every call so parameter changes
+        made between optimizer iterations are picked up automatically.
 
         :returns: DataFrame with columns ``datetime``, ``rdii_cfs``,
-            ``rdii_mm``, ``p_excess_mm``.
+            ``rdii_mm`` (or ``rdii_in``), ``p_excess_mm`` (or ``p_excess_in``).
         :rtype: pandas.DataFrame
         :raises RuntimeError: If ``prepare()`` has not been called.
         """
@@ -269,12 +310,12 @@ class CombinedHydroModel(IModel):
         self._sync_to_submodels()
 
         ia_result = self._ia_model.predict()
-        if "p_excess_mm" not in ia_result.columns:
+        if self._excess_col not in ia_result.columns:
             raise RuntimeError(
-                "ia_model.predict() must return a DataFrame with a "
-                f"'p_excess_mm' column; got columns: {list(ia_result.columns)}"
+                f"ia_model.predict() must return a DataFrame with a "
+                f"'{self._excess_col}' column; got columns: {list(ia_result.columns)}"
             )
-        p_excess = ia_result["p_excess_mm"].to_numpy(dtype=float)
+        p_excess = ia_result[self._excess_col].to_numpy(dtype=float)
         n = len(p_excess)
         rdii = np.zeros(n, dtype=float)
 
@@ -291,13 +332,14 @@ class CombinedHydroModel(IModel):
 
         rdii = np.clip(rdii, 0.0, None)
         area_acres = self.get_scalar_parameter("area_acres").value
-        rdii_cfs = rdii * area_acres * _MM_AC_PER_HR_TO_CFS / self._dt_hours
+        rdii_cfs = rdii * area_acres * self._depth_to_cfs
+        rdii_depth = rdii * self._dt_hours
 
         result = pd.DataFrame({
             "datetime": self._prepared_df["datetime"].values,
             "rdii_cfs": rdii_cfs,
-            "rdii_mm": rdii,
-            "p_excess_mm": p_excess.copy(),
+            self._depth_col: rdii_depth,
+            self._excess_col: p_excess.copy(),
         })
         self._state = ModelState.PREDICTED
         return result
@@ -314,16 +356,16 @@ class CombinedHydroModel(IModel):
     def inequality_constraints(self) -> list[float]:
         """Inequality constraint residuals for the optimizer.
 
-        Returns ``[Σ R_i - 1.0]``.  A value ≤ 0 means feasible.
-
-        :returns: List with one residual: ``sum(R_i) - 1.0``.
-        :rtype: list[float]
+        Returns ``[Σ R_i - 1.0, ia_T_freeze - ia_T_ref]``.
+        A value ≤ 0 means feasible.
         """
         R_sum = sum(
             self.get_scalar_parameter(f"R_{i}").value
             for i in range(1, self.n_components + 1)
         )
-        return [R_sum - 1.0]
+        T_freeze = self.get_scalar_parameter("ia_T_freeze").value
+        T_ref = self.get_scalar_parameter("ia_T_ref").value
+        return [R_sum - 1.0, T_freeze - T_ref]
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -331,17 +373,15 @@ class CombinedHydroModel(IModel):
 
     def _sync_to_submodels(self) -> None:
         """Push composite registry values to sub-model registries."""
-        # IA model parameters
-        for name in self._ia_param_names:
-            if name in self._scalar_parameters:
+        for ia_name, composite_name in self._ia_param_name_map.items():
+            if composite_name in self._scalar_parameters:
                 try:
-                    self._ia_model.get_scalar_parameter(name).value = (
-                        self.get_scalar_parameter(name).value
+                    self._ia_model.get_scalar_parameter(ia_name).value = (
+                        self.get_scalar_parameter(composite_name).value
                     )
                 except KeyError:
                     pass
 
-        # UH shape parameters + amplitude (keep sub-model's R/A in sync with R_i)
         for i, (uh, mapping) in enumerate(
             zip(self._uh_components, self._uh_param_maps), 1
         ):
@@ -361,6 +401,19 @@ class CombinedHydroModel(IModel):
                     )
                 except KeyError:
                     pass
+
+    def rename_scalar_parameter(self, old_name: str, new_name: str) -> None:
+        """Rename a scalar parameter and keep internal sync maps up to date."""
+        super().rename_scalar_parameter(old_name, new_name)
+        for ia_name, composite in self._ia_param_name_map.items():
+            if composite == old_name:
+                self._ia_param_name_map[ia_name] = new_name
+                break
+        for mapping in self._uh_param_maps:
+            for orig, composite in list(mapping.items()):
+                if composite == old_name:
+                    mapping[orig] = new_name
+                    break
 
 
 def _amplitude_default(uh: IUnitHydroComponent) -> float:

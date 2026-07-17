@@ -20,9 +20,6 @@ from __future__ import annotations
 import inspect
 from typing import Any, Iterator
 
-from .interfaces import IModel
-
-
 class ModelRegistry:
     """Central registry for tracking compatible parsimonious model classes.
 
@@ -45,13 +42,13 @@ class ModelRegistry:
     """
 
     def __init__(self) -> None:
-        self._models: dict[str, type[IModel]] = {}
+        self._models: dict[str, type] = {}
 
     # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
 
-    def register(self, model_cls: type[IModel]) -> type[IModel]:
+    def register(self, model_cls: type) -> type:
         """Register a compatible model class.
 
         May be used as a class decorator.
@@ -156,7 +153,8 @@ class ModelRegistry:
         :param model_cls: The class to check.
         :raises TypeError: If incompatible.
         """
-        if not (isinstance(model_cls, type) and issubclass(model_cls, IModel)):
+        from .models.base import IModel as _IModel  # lazy to avoid circular import
+        if not (isinstance(model_cls, type) and issubclass(model_cls, _IModel)):
             raise TypeError(
                 f"{model_cls!r} is not a subclass of IModel."
             )

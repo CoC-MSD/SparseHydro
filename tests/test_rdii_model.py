@@ -17,14 +17,20 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from sparsehydro.rdii import (
+from sparsehydro.models.rdii import (
     IAModel,
     RDIIModel,
     RTKTriangle,
-    nash_sutcliffe,
-    peak_weighted_mse,
     triangular_uh,
 )
+from sparsehydro.calibration.objectives import NashSutcliffe, PeakWeightedMSE
+
+# Convenience wrappers that match old function-call style used in TestObjectives
+def nash_sutcliffe(obs, pred):
+    return NashSutcliffe().evaluate(obs, pred)
+
+def peak_weighted_mse(obs, pred):
+    return PeakWeightedMSE().evaluate(obs, pred)
 
 # ---------------------------------------------------------------------------
 # Optional-dependency flags
@@ -61,9 +67,23 @@ def _make_sample_df(n: int = 48) -> pd.DataFrame:
     })
 
 
+def _make_rtk_components(n: int) -> list:
+    """Return n RTKTriangle components with default parameters."""
+    defaults = [
+        (0.05, 1.0, 1.5),
+        (0.03, 12.0, 2.0),
+        (0.02, 72.0, 3.0),
+    ]
+    components = []
+    for i in range(n):
+        R, T, K = defaults[i] if i < len(defaults) else (0.01, float(6 * (i + 1)), 2.0)
+        components.append(RTKTriangle(R=R, T=T, K=K))
+    return components
+
+
 def _prepared_model(n_triangles: int = 3) -> RDIIModel:
-    """Return a fully prepared RDIIModel using the sample DataFrame."""
-    m = RDIIModel(n_triangles=n_triangles)
+    """Return a fully prepared RDIIModel using the sample DataFrame (metric)."""
+    m = RDIIModel(uh_components=_make_rtk_components(n_triangles), units="metric")
     m.initialize()
     m.validate()
     m.prepare(_make_sample_df())
@@ -136,10 +156,12 @@ class TestIAModel(unittest.TestCase):
             m.step_wet(100.0)
         self.assertGreaterEqual(m.ia_avail, 0.0)
 
-    def test_compute_excess_zero_below_capacity(self):
+    def test_compute_excess_zero_while_bucket_absorbs(self):
+        # With k_dep*ia > 1, no excess until p* = ln(k_dep*ia)/k_dep of rain
+        # has fallen (default imperial k_dep=7.62, ia=10 → p* ≈ 0.568)
         m = IAModel(ia_max=10.0)
         m.ia_avail = 10.0
-        excess = m.compute_excess(rainfall_mm=2.0)
+        excess = m.compute_excess(rainfall_mm=0.3)
         self.assertAlmostEqual(excess, 0.0)
 
     def test_compute_excess_positive_when_saturated(self):
@@ -191,6 +213,187 @@ class TestIAModel(unittest.TestCase):
             temperature=np.full(5, 25.0), **kwargs
         )
         self.assertGreaterEqual(result_cold[4], result_warm[4])
+
+
+# ---------------------------------------------------------------------------
+# TestIAModelDesignDepletion
+# ---------------------------------------------------------------------------
+
+class TestIAModelDesignDepletion(unittest.TestCase):
+    """Design contract: IA_consumed = ia_avail * (1 - exp(-k_dep * P)) is
+    abstracted from the rainfall AND drained from the storage (mass-conserving),
+    so antecedent wetness directly controls the response."""
+
+    def test_mass_conservation(self):
+        """Capacity drained equals the water abstracted from the rainfall
+        (k_dep*ia <= 1 regime, where clipping never binds)."""
+        m = IAModel(ia_max=10.0, k_dep=0.1)
+        m.ia_avail = 10.0
+        P = 5.0
+        excess = m.compute_excess(rainfall_mm=P)
+        consumed = 10.0 * (1.0 - math.exp(-0.1 * P))
+        self.assertAlmostEqual(excess, P - consumed)
+        self.assertAlmostEqual(10.0 - m.ia_avail, consumed)
+        self.assertAlmostEqual(10.0 - m.ia_avail, P - excess)
+
+    def test_dt_invariance(self):
+        """One lumped step equals many uniform sub-steps (the closed form is
+        the exact limit of uniform disaggregation)."""
+        one = IAModel(ia_max=2.0, k_dep=2.0)
+        one.ia_avail = 2.0
+        excess_one = one.compute_excess(rainfall_mm=3.0)
+
+        many = IAModel(ia_max=2.0, k_dep=2.0)
+        many.ia_avail = 2.0
+        n = 2400
+        excess_many = sum(many.compute_excess(rainfall_mm=3.0 / n) for _ in range(n))
+
+        self.assertAlmostEqual(excess_one, excess_many, places=6)
+        self.assertAlmostEqual(one.ia_avail, many.ia_avail, places=6)
+
+    def test_closed_form_regime_values(self):
+        """Hand-computed regime checks."""
+        # Dry antecedent: ia0=2, k_dep=2, P=3 → excess ≈ 1.812 (was 1.005 lumped)
+        m = IAModel(ia_max=2.0, k_dep=2.0)
+        m.ia_avail = 2.0
+        self.assertAlmostEqual(m.compute_excess(3.0), 1.8116, places=3)
+        # Wet antecedent: ia0=0.3 (k_dep*ia <= 1) → unchanged from lumped form
+        m2 = IAModel(ia_max=2.0, k_dep=2.0)
+        m2.ia_avail = 0.3
+        self.assertAlmostEqual(
+            m2.compute_excess(3.0), 3.0 - 0.3 * (1 - math.exp(-6.0)), places=6,
+        )
+
+    def test_k_dep_zero_means_no_abstraction(self):
+        """k_dep = 0 → IA_consumed = 0 → excess = P (no degenerate threshold)."""
+        rain = np.array([0.0, 2.0, 5.0])
+        result = IAModel.compute_excess_series(
+            rainfall_mm=rain, dt_hours=np.ones(3), temperature=None,
+            ia_max=10.0, k0=0.05, kT=0.0, theta=0.0,
+            T_ref=20.0, k_dep=0.0, T_freeze=0.0,
+        )
+        np.testing.assert_allclose(result, rain)
+
+    def test_large_k_dep_annihilates_capacity(self):
+        """k_dep → ∞: the bucket is destroyed within the first p* of rain with
+        negligible absorption → excess → P.  (Absorption is maximised at an
+        interior k_dep ≈ 1/ia_max, not at the extremes.)"""
+        m = IAModel(ia_max=2.0, k_dep=1e6)
+        m.ia_avail = 2.0
+        excess = m.compute_excess(rainfall_mm=5.0)
+        self.assertAlmostEqual(excess, 5.0, places=3)
+        self.assertAlmostEqual(m.ia_avail, 0.0, places=6)
+
+    def test_antecedent_contrast_same_storm(self):
+        """A full bucket abstracts more from the same storm than a drained one."""
+        full = IAModel(ia_max=2.0, k_dep=1.0)
+        full.ia_avail = 2.0
+        low = IAModel(ia_max=2.0, k_dep=1.0)
+        low.ia_avail = 0.2
+        self.assertLess(full.compute_excess(1.5), low.compute_excess(1.5))
+
+    def test_dry_spell_then_back_to_back_storms(self):
+        """After 30 dry days the first storm is mostly absorbed; the second,
+        on the drained bucket, mostly runs off."""
+        rain = np.zeros(32)
+        rain[30] = 1.5
+        rain[31] = 1.5
+        result = IAModel.compute_excess_series(
+            rainfall_mm=rain, dt_hours=np.full(32, 24.0), temperature=None,
+            ia_max=2.0, k0=0.05, kT=0.0, theta=0.0,
+            T_ref=20.0, k_dep=1.0, T_freeze=0.0,
+        )
+        # Day 30 (full bucket, closed form): p*=ln2 → excess ≈ 0.253
+        # Day 31 (bucket ~0.446): excess ≈ 1.153
+        self.assertLess(result[30], 0.4)
+        self.assertGreater(result[31], 1.0)
+        self.assertLess(result[30], result[31])
+
+    def test_recovery_refills_between_storms(self):
+        """Dry-interval recovery restores absorption for the next storm."""
+        rain = np.array([5.0, 0.0, 0.0, 0.0, 1.0])
+        kwargs = dict(
+            rainfall_mm=rain, dt_hours=np.full(5, 24.0), temperature=None,
+            ia_max=2.0, kT=0.0, theta=0.0,
+            T_ref=20.0, k_dep=2.0, T_freeze=0.0,
+        )
+        fast = IAModel.compute_excess_series(k0=1.0, **kwargs)
+        slow = IAModel.compute_excess_series(k0=0.0001, **kwargs)
+        self.assertLess(fast[4], slow[4])
+
+
+# ---------------------------------------------------------------------------
+# TestIAModelSnow
+# ---------------------------------------------------------------------------
+
+class TestIAModelSnow(unittest.TestCase):
+    """Degree-day snow model: precip on cold days is stored as SWE and
+    released as melt during warm spells, feeding the IA wet/dry logic."""
+
+    # k_dep=0 → excess equals the liquid input, isolating the snow logic
+    _ia_kwargs = dict(
+        ia_max=2.0, k0=0.0, kT=0.0, theta=0.0,
+        T_ref=20.0, k_dep=0.0, T_freeze=0.0,
+    )
+
+    def test_snowfall_accumulates_then_melts(self):
+        """Cold rainy days produce no response; a later warm DRY spell does."""
+        rain = np.array([1.0] * 5 + [0.0] * 5)
+        temp = np.array([-5.0] * 5 + [6.0] * 5)
+        result = IAModel.compute_excess_series(
+            rainfall_mm=rain, dt_hours=np.full(10, 24.0), temperature=temp,
+            snow_ddf=0.5, snow_T=1.0, **self._ia_kwargs,
+        )
+        np.testing.assert_allclose(result[:5], 0.0)   # snowed, no liquid
+        self.assertGreater(result[5], 0.0)            # melt with zero rain
+        self.assertAlmostEqual(result.sum(), 5.0)     # all SWE eventually melts
+
+    def test_melt_rate_and_swe_cap(self):
+        """melt = ddf*(T - snow_T)*dt_days, capped at remaining SWE."""
+        rain = np.array([1.0, 0.0, 0.0, 0.0])
+        temp = np.array([-5.0, 3.0, 3.0, 3.0])   # warm days: T - snow_T = 2
+        result = IAModel.compute_excess_series(
+            rainfall_mm=rain, dt_hours=np.full(4, 24.0), temperature=temp,
+            snow_ddf=0.25, snow_T=1.0, **self._ia_kwargs,
+        )
+        np.testing.assert_allclose(result, [0.0, 0.5, 0.5, 0.0], atol=1e-12)
+
+    def test_rain_on_snow_adds_melt(self):
+        """A warm rain day yields more excess when a snowpack is present."""
+        base = dict(dt_hours=np.full(2, 24.0), snow_ddf=0.5, snow_T=1.0,
+                    **self._ia_kwargs)
+        with_pack = IAModel.compute_excess_series(
+            rainfall_mm=np.array([2.0, 1.0]),
+            temperature=np.array([-5.0, 5.0]), **base,
+        )
+        without_pack = IAModel.compute_excess_series(
+            rainfall_mm=np.array([0.0, 1.0]),
+            temperature=np.array([-5.0, 5.0]), **base,
+        )
+        self.assertGreater(with_pack[1], without_pack[1])
+
+    def test_snow_disabled_is_identical(self):
+        """snow_T=None (default) reproduces the no-snow series exactly."""
+        rain = np.array([0.0, 5.0, 10.0, 5.0, 0.0])
+        kwargs = dict(
+            rainfall_mm=rain, dt_hours=np.ones(5),
+            temperature=np.full(5, -10.0),   # cold — would snow if enabled
+            ia_max=5.0, k0=0.05, kT=0.02, theta=0.1,
+            T_ref=20.0, k_dep=0.3, T_freeze=0.0,
+        )
+        default = IAModel.compute_excess_series(**kwargs)
+        explicit = IAModel.compute_excess_series(snow_ddf=0.5, snow_T=None, **kwargs)
+        np.testing.assert_allclose(default, explicit)
+
+    def test_snow_param_registration(self):
+        m = IAModel(snow=True)
+        m.initialize()
+        self.assertTrue(m.get_scalar_parameter("snow_T").calibrate)
+        self.assertTrue(m.get_scalar_parameter("snow_ddf").calibrate)
+        m2 = IAModel()
+        m2.initialize()
+        self.assertNotIn("snow_T", m2.scalar_parameter_names)
+        self.assertNotIn("snow_ddf", m2.scalar_parameter_names)
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +551,7 @@ class TestRDIIModel(unittest.TestCase):
         self.sample_df = _make_sample_df()
 
     def _prepared(self, n_triangles: int = 3) -> RDIIModel:
-        m = RDIIModel(n_triangles=n_triangles)
+        m = RDIIModel(uh_components=_make_rtk_components(n_triangles), units="metric")
         m.initialize()
         self.assertTrue(m.validate())
         m.prepare(self.sample_df)
@@ -368,16 +571,16 @@ class TestRDIIModel(unittest.TestCase):
     def test_initial_state_created(self):
         self.assertTrue(RDIIModel().is_created())
 
-    def test_zero_triangles_raises(self):
+    def test_invalid_units_raises(self):
         with self.assertRaises(ValueError):
-            RDIIModel(n_triangles=0)
+            RDIIModel(units="furlongs")
 
     # --- initialize ---
 
     def test_initialize_param_count(self):
         for n in (1, 2, 3, 5):
-            with self.subTest(n_triangles=n):
-                m = RDIIModel(n_triangles=n)
+            with self.subTest(n_components=n):
+                m = RDIIModel(uh_components=_make_rtk_components(n))
                 m.initialize()
                 self.assertEqual(len(m.scalar_parameter_names), 8 + 3 * n)
 
@@ -391,11 +594,13 @@ class TestRDIIModel(unittest.TestCase):
         self.assertTrue(ia_expected.issubset(set(m.scalar_parameter_names)))
 
     def test_initialize_rtk_params_present(self):
-        m = RDIIModel(n_triangles=2)
+        m = RDIIModel(uh_components=_make_rtk_components(2))
         m.initialize()
+        # R_1, R_2 are own params; shape params are uh1_T, uh1_K, uh2_T, uh2_K
         for i in (1, 2):
-            for prefix in ("R", "T", "K"):
-                self.assertIn(f"{prefix}_{i}", m.scalar_parameter_names)
+            self.assertIn(f"R_{i}", m.scalar_parameter_names)
+            self.assertIn(f"uh{i}_T", m.scalar_parameter_names)
+            self.assertIn(f"uh{i}_K", m.scalar_parameter_names)
 
     # --- validate ---
 
@@ -408,7 +613,7 @@ class TestRDIIModel(unittest.TestCase):
     def test_validate_fails_R_sum_exceeds_one(self):
         # validate() no longer blocks on R_sum > 1; the constraint is now
         # enforced by the solver via inequality_constraints().
-        m = RDIIModel(n_triangles=3)
+        m = RDIIModel(uh_components=_make_rtk_components(3))
         m.initialize()
         for i in range(1, 4):
             m._scalar_parameters[f"R_{i}"].value = 0.5
@@ -416,7 +621,8 @@ class TestRDIIModel(unittest.TestCase):
         self.assertTrue(m.validate())
         # but inequality_constraints should report a violation
         g = m.inequality_constraints()
-        self.assertEqual(len(g), 1)
+        # new model has 2 constraints: sum_R_leq_1 and T_freeze_lt_T_ref
+        self.assertEqual(len(g), 2)
         self.assertGreater(g[0], 0.0)   # 1.5 - 1.0 = 0.5 > 0 → infeasible
 
     def test_validate_fails_T_freeze_ge_T_ref(self):
@@ -453,7 +659,7 @@ class TestRDIIModel(unittest.TestCase):
         self.assertIn("missing required columns", str(ctx.exception))
 
     def test_prepare_fills_temperature_with_T_ref(self):
-        m = RDIIModel()
+        m = RDIIModel(units="metric")
         m.initialize()
         m.validate()
         df = self.sample_df.drop(columns=["temperature_c"])
@@ -489,7 +695,7 @@ class TestRDIIModel(unittest.TestCase):
             "datetime": pd.date_range("2024-01-01", periods=n, freq="h"),
             "rainfall_mm": np.zeros(n),
         })
-        m = RDIIModel()
+        m = RDIIModel(units="metric")
         m.initialize()
         m.validate()
         m.prepare(df)
@@ -526,13 +732,11 @@ class TestRDIIModel(unittest.TestCase):
         m.finalize()
         self.assertTrue(m.is_finalized())
         self.assertIsNone(m._prepared_df)
-        self.assertIsNone(m._p_excess)
-        self.assertEqual(m._uh_kernels, [])
 
     # --- full lifecycle ---
 
     def test_full_lifecycle(self):
-        m = RDIIModel(n_triangles=2)
+        m = RDIIModel(uh_components=_make_rtk_components(2), units="metric")
         m.initialize()
         self.assertTrue(m.validate())
         m.prepare(self.sample_df)
@@ -551,6 +755,44 @@ class TestRDIIModel(unittest.TestCase):
         m = self._prepared(n_triangles=10)
         result = m.predict()
         self.assertEqual(len(result), len(self.sample_df))
+
+    def test_cfs_volume_conservation_daily(self):
+        """CFS totals and depth totals must conserve volume regardless of timestep.
+
+        A single rainfall pulse of known depth should yield the same runoff volume
+        whether the model is run at hourly or daily resolution.
+        """
+        area = 500.0  # acres
+        rain_in = 1.0  # inch pulse
+
+        def run(dt_hours):
+            dates = pd.date_range("2020-01-01", periods=120, freq=f"{dt_hours}h")
+            rain = np.zeros(len(dates))
+            rain[5] = rain_in
+            df = pd.DataFrame({"datetime": dates, "rainfall_in": rain, "temperature_c": 15.0})
+            m = RDIIModel(uh_components=[RTKTriangle(R=0.05, T=1.0, K=1.5)], units="imperial")
+            m.initialize()
+            m.get_scalar_parameter("ia_max").update(value=0.0, lower_bound=0.0)
+            m.get_scalar_parameter("ia_k_dep").update(value=0.0, lower_bound=0.0)
+            m.get_scalar_parameter("ia_T_freeze").update(value=-5.0)
+            m.get_scalar_parameter("R_1").update(value=1.0)
+            m.get_scalar_parameter("area_acres").update(value=area)
+            m.validate()
+            m.prepare(df)
+            result = m.predict()
+            dt_sec = dt_hours * 3600.0
+            cfs_vol = (result["rdii_cfs"] * dt_sec).sum()   # CFS-seconds
+            depth_sum = result["rdii_in"].sum()              # inches (depth per step summed)
+            return cfs_vol, depth_sum
+
+        vol_hourly, depth_hourly = run(1)
+        vol_daily,  depth_daily  = run(24)
+        # Both should equal: 1 in * area acres → ft³
+        expected_cfs_sec = rain_in / 12.0 * area * 43560.0
+        np.testing.assert_allclose(vol_hourly, expected_cfs_sec, rtol=1e-3)
+        np.testing.assert_allclose(vol_daily,  expected_cfs_sec, rtol=1e-3)
+        # rdii_in is depth per timestep — sums must be equal across resolutions
+        np.testing.assert_allclose(depth_hourly, depth_daily, rtol=1e-3)
 
 
 # ---------------------------------------------------------------------------
@@ -671,7 +913,7 @@ class TestVisualization(unittest.TestCase):
 
     def test_plot_timeseries_returns_figure(self):
         import plotly.graph_objects as go
-        from sparsehydro.rdii import plot_timeseries
+        from sparsehydro.visualization import plot_timeseries
         fig = plot_timeseries(
             datetime=self.sample_df["datetime"],
             rainfall_mm=self.sample_df["rainfall_mm"].to_numpy(),
@@ -682,7 +924,7 @@ class TestVisualization(unittest.TestCase):
 
     def test_plot_timeseries_no_observed(self):
         import plotly.graph_objects as go
-        from sparsehydro.rdii import plot_timeseries
+        from sparsehydro.visualization import plot_timeseries
         fig = plot_timeseries(
             datetime=self.sample_df["datetime"],
             rainfall_mm=self.sample_df["rainfall_mm"].to_numpy(),
@@ -693,24 +935,24 @@ class TestVisualization(unittest.TestCase):
 
     def test_plot_pareto_evolution_returns_figure(self):
         import plotly.graph_objects as go
-        from sparsehydro.rdii import plot_pareto_evolution
+        from sparsehydro.visualization import plot_pareto_evolution
         fig = plot_pareto_evolution(self.opt_result)
         self.assertIsInstance(fig, go.Figure)
 
     def test_plot_pareto_evolution_frame_count(self):
-        from sparsehydro.rdii import plot_pareto_evolution
+        from sparsehydro.visualization import plot_pareto_evolution
         fig = plot_pareto_evolution(self.opt_result)
         self.assertEqual(len(fig.frames), len(self.opt_result.history))
 
     def test_plot_parallel_coordinates_returns_figure(self):
         import plotly.graph_objects as go
-        from sparsehydro.rdii import plot_parallel_coordinates
+        from sparsehydro.visualization import plot_parallel_coordinates
         fig = plot_parallel_coordinates(self.opt_result)
         self.assertIsInstance(fig, go.Figure)
 
     def test_plot_parallel_coordinates_color_by_pwmse(self):
         import plotly.graph_objects as go
-        from sparsehydro.rdii import plot_parallel_coordinates
+        from sparsehydro.visualization import plot_parallel_coordinates
         fig = plot_parallel_coordinates(self.opt_result, color_by="peak_weighted_mse")
         self.assertIsInstance(fig, go.Figure)
 

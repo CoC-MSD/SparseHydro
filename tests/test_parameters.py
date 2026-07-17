@@ -142,3 +142,85 @@ class TestVectorParameter:
                             lower_bounds=[0.0, 0.0], upper_bounds=[1.0, 2.0])
         _ = p.clamp()
         assert p.values[1] == pytest.approx(3.0)
+
+
+class TestScalarParameterUpdate:
+    def test_update_value(self):
+        p = ScalarParameter("k", value=0.5, lower_bound=0.0, upper_bound=1.0)
+        p.update(value=0.8)
+        assert p.value == pytest.approx(0.8)
+
+    def test_update_units(self):
+        p = ScalarParameter("k", value=0.5, lower_bound=0.0, upper_bound=1.0)
+        p.update(units="mm")
+        assert p.units == "mm"
+
+    def test_update_description(self):
+        p = ScalarParameter("k", value=0.5, lower_bound=0.0, upper_bound=1.0)
+        p.update(description="recession rate")
+        assert p.description == "recession rate"
+
+    def test_update_calibrate(self):
+        p = ScalarParameter("k", value=0.5, lower_bound=0.0, upper_bound=1.0)
+        p.update(calibrate=False)
+        assert p.calibrate is False
+
+    def test_update_bounds(self):
+        p = ScalarParameter("k", value=0.5, lower_bound=0.0, upper_bound=1.0)
+        p.update(lower_bound=0.1, upper_bound=0.9)
+        assert p.lower_bound == pytest.approx(0.1)
+        assert p.upper_bound == pytest.approx(0.9)
+
+    def test_update_multiple_at_once(self):
+        p = ScalarParameter("k", value=0.5, lower_bound=0.0, upper_bound=1.0)
+        p.update(value=0.3, units="in", description="depth")
+        assert p.value == pytest.approx(0.3)
+        assert p.units == "in"
+        assert p.description == "depth"
+
+    def test_update_invalid_bounds_raises(self):
+        p = ScalarParameter("k", value=0.5, lower_bound=0.0, upper_bound=1.0)
+        with pytest.raises(ValueError, match="lower_bound"):
+            p.update(lower_bound=2.0)
+
+    def test_update_leaves_other_fields_unchanged(self):
+        p = ScalarParameter("k", value=0.5, lower_bound=0.0, upper_bound=1.0,
+                            units="1/hr", description="original")
+        p.update(value=0.6)
+        assert p.units == "1/hr"
+        assert p.description == "original"
+        assert p.lower_bound == pytest.approx(0.0)
+
+
+class TestVectorParameterUpdate:
+    def test_update_values(self):
+        p = VectorParameter("beta", values=[0.2, 0.8], lower_bounds=0.0, upper_bounds=1.0)
+        p.update(values=[0.3, 0.7])
+        np.testing.assert_allclose(p.values, [0.3, 0.7])
+
+    def test_update_units(self):
+        p = VectorParameter("beta", values=[0.2, 0.8], lower_bounds=0.0, upper_bounds=1.0)
+        p.update(units="m/s")
+        assert p.units == "m/s"
+
+    def test_update_description(self):
+        p = VectorParameter("beta", values=[0.2, 0.8], lower_bounds=0.0, upper_bounds=1.0)
+        p.update(description="shape params")
+        assert p.description == "shape params"
+
+    def test_update_bounds(self):
+        p = VectorParameter("beta", values=[0.2, 0.8], lower_bounds=0.0, upper_bounds=1.0)
+        p.update(lower_bounds=0.1, upper_bounds=0.9)
+        np.testing.assert_allclose(p.lower_bounds, [0.1, 0.1])
+        np.testing.assert_allclose(p.upper_bounds, [0.9, 0.9])
+
+    def test_update_invalid_bounds_raises(self):
+        p = VectorParameter("beta", values=[0.2, 0.8], lower_bounds=0.0, upper_bounds=1.0)
+        with pytest.raises(ValueError):
+            p.update(lower_bounds=[2.0, 2.0])
+
+    def test_update_leaves_other_fields_unchanged(self):
+        p = VectorParameter("beta", values=[0.2, 0.8], lower_bounds=0.0, upper_bounds=1.0,
+                            units="cm", description="original")
+        p.update(units="m")
+        assert p.description == "original"

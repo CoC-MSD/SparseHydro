@@ -122,3 +122,53 @@ class TestParameterRegistry:
         new_p = ScalarParameter("k", value=0.9, lower_bound=0.0, upper_bound=1.0)
         self.model.register_scalar_parameter(new_p)
         assert self.model.get_scalar_parameter("k").value == pytest.approx(0.9)
+
+
+class TestRenameParameter:
+    def setup_method(self):
+        self.model = SimpleModel()
+        self.model.initialize()
+
+    def test_rename_scalar_updates_registry_key(self):
+        self.model.rename_scalar_parameter("k", "recession_rate")
+        assert "recession_rate" in self.model.scalar_parameter_names
+        assert "k" not in self.model.scalar_parameter_names
+
+    def test_rename_scalar_updates_param_name_field(self):
+        self.model.rename_scalar_parameter("k", "recession_rate")
+        p = self.model.get_scalar_parameter("recession_rate")
+        assert p.name == "recession_rate"
+
+    def test_rename_scalar_preserves_value(self):
+        self.model.rename_scalar_parameter("k", "recession_rate")
+        p = self.model.get_scalar_parameter("recession_rate")
+        assert p.value == pytest.approx(0.5)
+
+    def test_rename_scalar_missing_raises(self):
+        with pytest.raises(KeyError):
+            self.model.rename_scalar_parameter("nonexistent", "new_name")
+
+    def test_rename_scalar_duplicate_raises(self):
+        self.model.register_scalar_parameter(
+            ScalarParameter("other", value=0.1, lower_bound=0.0, upper_bound=1.0)
+        )
+        with pytest.raises(ValueError, match="already exists"):
+            self.model.rename_scalar_parameter("k", "other")
+
+    def test_rename_vector_updates_registry_key(self):
+        self.model.rename_vector_parameter("beta", "shape_params")
+        assert "shape_params" in self.model.vector_parameter_names
+        assert "beta" not in self.model.vector_parameter_names
+
+    def test_rename_vector_updates_param_name_field(self):
+        self.model.rename_vector_parameter("beta", "shape_params")
+        p = self.model.get_vector_parameter("shape_params")
+        assert p.name == "shape_params"
+
+    def test_rename_vector_missing_raises(self):
+        with pytest.raises(KeyError):
+            self.model.rename_vector_parameter("nonexistent", "new_name")
+
+    def test_rename_vector_duplicate_raises(self):
+        with pytest.raises(ValueError, match="already exists"):
+            self.model.rename_vector_parameter("beta", "beta")

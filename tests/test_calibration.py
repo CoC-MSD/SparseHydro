@@ -218,6 +218,45 @@ class TestObjectives(unittest.TestCase):
         pred = np.array([1.0, 2.0, 4.0, 2.5])
         self.assertGreater(PeakWeightedMSE().evaluate(obs, pred), 0.0)
 
+    def test_peak_weighted_mse_power_default_matches_linear(self):
+        from sparsehydro.calibration.objectives import _peak_weighted_mse
+        obs = np.array([1.0, 3.0, 5.0, 2.0])
+        pred = np.array([1.0, 2.0, 4.0, 2.5])
+        self.assertAlmostEqual(
+            PeakWeightedMSE().evaluate(obs, pred),
+            _peak_weighted_mse(obs, pred, power=1.0),
+            places=12,
+        )
+
+    def test_peak_weighted_mse_power_zero_is_plain_mse(self):
+        obs = np.array([1.0, 3.0, 5.0, 2.0])
+        pred = np.array([1.0, 2.0, 4.0, 2.5])
+        self.assertAlmostEqual(
+            PeakWeightedMSE(power=0.0).evaluate(obs, pred),
+            MSE().evaluate(obs, pred),
+            places=12,
+        )
+
+    def test_peak_weighted_mse_power_sharpens_peak_focus(self):
+        # Same absolute error placed at the peak vs at the lowest flow:
+        # raising the power must widen the penalty gap between the two cases.
+        obs = np.array([1.0, 2.0, 3.0, 10.0])
+        err_at_peak = obs + np.array([0.0, 0.0, 0.0, 1.0])
+        err_at_low = obs + np.array([1.0, 0.0, 0.0, 0.0])
+        for power in (1.0, 2.0, 3.0):
+            ratio = (
+                PeakWeightedMSE(power=power).evaluate(obs, err_at_peak)
+                / PeakWeightedMSE(power=power).evaluate(obs, err_at_low)
+            )
+            self.assertGreater(ratio, 1.0)
+            if power > 1.0:
+                self.assertGreater(ratio, prev_ratio)
+            prev_ratio = ratio
+
+    def test_peak_weighted_mse_negative_power_raises(self):
+        with self.assertRaises(ValueError):
+            PeakWeightedMSE(power=-1.0)
+
 
 # ===========================================================================
 # Test _identify_pareto

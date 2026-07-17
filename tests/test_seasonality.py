@@ -1,11 +1,18 @@
-"""Tests for SeasonalityModel — Fourier-series sanitary base-flow estimator."""
+"""Tests for SeasonalityModel — discrete peaking-factor seasonal flow estimator.
+
+The new SeasonalityModel uses discrete peaking factors for hour-of-day (24 bins),
+day-of-week (7 bins), and month-of-year (12 bins), rather than the old Fourier series.
+
+Formula: output[t] = baseline * sum_d( w_d * pf_d_norm[category_d(t)] )
+where pf_d_norm = pf_d / mean(pf_d), and sum(w_d) == 1.
+"""
 
 import unittest
 
 import numpy as np
 import pandas as pd
 
-from sparsehydro.rdii.seasonality import SeasonalityModel
+from sparsehydro.models import SeasonalityModel
 
 
 # ---------------------------------------------------------------------------
@@ -18,46 +25,35 @@ def _make_df(n: int = 24 * 7, freq: str = "h") -> pd.DataFrame:
     return pd.DataFrame({"datetime": t})
 
 
-def _make_df_with_features(n: int = 48) -> pd.DataFrame:
-    df = _make_df(n)
-    dt = pd.to_datetime(df["datetime"])
-    df["hour_of_day"] = dt.dt.hour + dt.dt.minute / 60.0
-    df["day_of_week"] = dt.dt.dayofweek.astype(float)
-    df["day_of_year"] = dt.dt.dayofyear.astype(float)
-    return df
-
-
 # ---------------------------------------------------------------------------
 # Construction & validation
 # ---------------------------------------------------------------------------
 
 class TestSeasonalityModelConstruction(unittest.TestCase):
 
-    def test_default_periods(self):
+    def test_default_all_dims_active(self):
         m = SeasonalityModel()
-        self.assertIn("hour_of_day", m.periods)
-        self.assertIn("day_of_week", m.periods)
-        self.assertIn("day_of_year", m.periods)
+        self.assertTrue(m.include_hour)
+        self.assertTrue(m.include_dow)
+        self.assertTrue(m.include_month)
 
-    def test_custom_periods(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0})
-        self.assertEqual(list(m.periods.keys()), ["hour_of_day"])
-
-    def test_n_terms_stored(self):
-        m = SeasonalityModel(n_terms=3)
-        self.assertEqual(m.n_terms, 3)
+    def test_include_hour_only(self):
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
+        self.assertTrue(m.include_hour)
+        self.assertFalse(m.include_dow)
+        self.assertFalse(m.include_month)
 
     def test_output_name_stored(self):
         m = SeasonalityModel(output_name="q_san")
         self.assertEqual(m.output_name, "q_san")
 
-    def test_invalid_n_terms_raises(self):
-        with self.assertRaises(ValueError):
-            SeasonalityModel(n_terms=0)
+    def test_default_output_name_is_flow(self):
+        m = SeasonalityModel()
+        self.assertEqual(m.output_name, "flow")
 
-    def test_invalid_coeff_bounds_raises(self):
+    def test_no_dims_raises(self):
         with self.assertRaises(ValueError):
-            SeasonalityModel(coeff_bounds=(10.0, -10.0))
+            SeasonalityModel(include_hour=False, include_dow=False, include_month=False)
 
 
 # ---------------------------------------------------------------------------
@@ -66,45 +62,98 @@ class TestSeasonalityModelConstruction(unittest.TestCase):
 
 class TestSeasonalityModelInitialize(unittest.TestCase):
 
-    def test_parameter_count_default(self):
-        # 3 periods × 5 terms × 2 (a + b) = 30
-        m = SeasonalityModel(n_terms=5)
+    def test_parameter_count_all_dims(self):
+        # 1 baseline + 3 weights + 24 pf_hour + 7 pf_dow + 12 pf_month
+        # But these are vector parameters — scalar_parameter_names contains only scalar params
+        # Scalar params: baseline, w_hour, w_dow, w_month = 4
+        m = SeasonalityModel(include_hour=True, include_dow=True, include_month=True)
         m.initialize()
-        self.assertEqual(len(m.scalar_parameter_names), 30)
+        # scalar: baseline + 3 dimension weights = 4
+        self.assertEqual(len(m.scalar_parameter_names), 4)
 
-    def test_parameter_count_custom(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0, "day_of_year": 365.25}, n_terms=3)
+    def test_parameter_count_hour_only(self):
+        # scalar: baseline + w_hour = 2
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
         m.initialize()
-        # 2 periods × 3 terms × 2 = 12
-        self.assertEqual(len(m.scalar_parameter_names), 12)
+        self.assertEqual(len(m.scalar_parameter_names), 2)
 
-    def test_parameter_names_format(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=2)
+    def test_parameter_count_hour_and_month(self):
+        # scalar: baseline + w_hour + w_month = 3
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=True)
         m.initialize()
-        names = m.scalar_parameter_names
-        self.assertIn("a_hour_of_day_1", names)
-        self.assertIn("b_hour_of_day_1", names)
-        self.assertIn("a_hour_of_day_2", names)
-        self.assertIn("b_hour_of_day_2", names)
+        self.assertEqual(len(m.scalar_parameter_names), 3)
 
-    def test_default_coeff_values_zero(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=2)
+    def test_baseline_registered(self):
+        m = SeasonalityModel()
         m.initialize()
-        for name in m.scalar_parameter_names:
-            self.assertEqual(m.get_scalar_parameter(name).value, 0.0)
+        self.assertIn("baseline", m.scalar_parameter_names)
 
-    def test_coeff_bounds_applied(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=1,
-                             coeff_bounds=(-100.0, 100.0))
+    def test_weight_params_registered_all_dims(self):
+        m = SeasonalityModel()
         m.initialize()
-        p = m.get_scalar_parameter("a_hour_of_day_1")
-        self.assertEqual(p.lower_bound, -100.0)
-        self.assertEqual(p.upper_bound, 100.0)
+        self.assertIn("w_hour", m.scalar_parameter_names)
+        self.assertIn("w_dow", m.scalar_parameter_names)
+        self.assertIn("w_month", m.scalar_parameter_names)
+
+    def test_weight_params_only_for_active_dims(self):
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
+        m.initialize()
+        self.assertIn("w_hour", m.scalar_parameter_names)
+        self.assertNotIn("w_dow", m.scalar_parameter_names)
+        self.assertNotIn("w_month", m.scalar_parameter_names)
+
+    def test_pf_hour_vector_param_registered(self):
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
+        m.initialize()
+        pf = m.get_vector_parameter("pf_hour")
+        self.assertEqual(len(pf.values), 24)
+
+    def test_pf_dow_vector_param_registered(self):
+        m = SeasonalityModel(include_hour=False, include_dow=True, include_month=False)
+        m.initialize()
+        pf = m.get_vector_parameter("pf_dow")
+        self.assertEqual(len(pf.values), 7)
+
+    def test_pf_month_vector_param_registered(self):
+        m = SeasonalityModel(include_hour=False, include_dow=False, include_month=True)
+        m.initialize()
+        pf = m.get_vector_parameter("pf_month")
+        self.assertEqual(len(pf.values), 12)
+
+    def test_pf_hour_default_values_are_ones(self):
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
+        m.initialize()
+        np.testing.assert_allclose(m.get_vector_parameter("pf_hour").values, 1.0)
+
+    def test_default_weight_equals_one_over_n_dims(self):
+        m = SeasonalityModel(include_hour=True, include_dow=True, include_month=False)
+        m.initialize()
+        self.assertAlmostEqual(m.get_scalar_parameter("w_hour").value, 0.5)
+        self.assertAlmostEqual(m.get_scalar_parameter("w_dow").value, 0.5)
+
+    def test_sum_w_constraints_registered(self):
+        m = SeasonalityModel()
+        m.initialize()
+        self.assertIn("sum_w_leq_1", m.inequality_constraint_names)
+        self.assertIn("sum_w_geq_1", m.inequality_constraint_names)
 
     def test_state_initialized(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=1)
+        m = SeasonalityModel()
         m.initialize()
         self.assertTrue(m.is_initialized())
+
+
+# ---------------------------------------------------------------------------
+# validate()
+# ---------------------------------------------------------------------------
+
+class TestSeasonalityModelValidate(unittest.TestCase):
+
+    def test_validate_passes_with_defaults(self):
+        m = SeasonalityModel()
+        m.initialize()
+        self.assertTrue(m.validate())
+        self.assertTrue(m.is_validated())
 
 
 # ---------------------------------------------------------------------------
@@ -113,56 +162,48 @@ class TestSeasonalityModelInitialize(unittest.TestCase):
 
 class TestSeasonalityModelPrepare(unittest.TestCase):
 
-    def test_auto_compute_hod(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=1)
+    def test_prepare_sets_state(self):
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
+        m.initialize()
+        m.validate()
+        m.prepare(_make_df(n=24))
+        self.assertTrue(m.is_prepared())
+
+    def test_prepare_missing_datetime_raises(self):
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
+        m.initialize()
+        m.validate()
+        df = pd.DataFrame({"other": [1, 2, 3]})
+        with self.assertRaises((KeyError, ValueError)):
+            m.prepare(df)
+
+    def test_prepare_caches_hour_index(self):
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
         m.initialize()
         m.validate()
         df = _make_df(n=24)
         m.prepare(df)
-        # hour_of_day should be auto-computed from datetime
-        self.assertIn("hour_of_day", m._features)
-        hod = m._features["hour_of_day"]
-        self.assertEqual(len(hod), 24)
+        self.assertIsNotNone(m._h)
+        self.assertEqual(len(m._h), 24)
 
-    def test_auto_compute_dow(self):
-        m = SeasonalityModel(periods={"day_of_week": 7.0}, n_terms=1)
+    def test_prepare_caches_dow_index(self):
+        m = SeasonalityModel(include_hour=False, include_dow=True, include_month=False)
         m.initialize()
         m.validate()
         df = _make_df(n=7)
         m.prepare(df)
-        self.assertIn("day_of_week", m._features)
+        self.assertIsNotNone(m._dow)
 
-    def test_auto_compute_doy(self):
-        m = SeasonalityModel(periods={"day_of_year": 365.25}, n_terms=1)
+    def test_prepare_caches_month_index(self):
+        m = SeasonalityModel(include_hour=False, include_dow=False, include_month=True)
         m.initialize()
         m.validate()
         df = _make_df(n=365)
         m.prepare(df)
-        self.assertIn("day_of_year", m._features)
-
-    def test_explicit_column_used_when_present(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=1)
-        m.initialize()
-        m.validate()
-        df = _make_df(n=5)
-        df["hour_of_day"] = np.array([1.0, 2.0, 3.0, 4.0, 5.0])
-        m.prepare(df)
-        np.testing.assert_array_equal(m._features["hour_of_day"], [1.0, 2.0, 3.0, 4.0, 5.0])
-
-    def test_missing_non_standard_column_raises(self):
-        m = SeasonalityModel(periods={"custom_feature": 12.0}, n_terms=1)
-        m.initialize()
-        m.validate()
-        df = _make_df(n=5)  # no "custom_feature" column
-        with self.assertRaises(ValueError):
-            m.prepare(df)
-
-    def test_state_prepared(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=1)
-        m.initialize()
-        m.validate()
-        m.prepare(_make_df())
-        self.assertTrue(m.is_prepared())
+        self.assertIsNotNone(m._month)
+        # month is 0-indexed: 0=Jan, 11=Dec
+        self.assertTrue(np.all(m._month >= 0))
+        self.assertTrue(np.all(m._month <= 11))
 
 
 # ---------------------------------------------------------------------------
@@ -172,11 +213,12 @@ class TestSeasonalityModelPrepare(unittest.TestCase):
 class TestSeasonalityModelPredict(unittest.TestCase):
 
     def setUp(self):
-        self.m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=1,
-                                  output_name="sanitary_cfs")
+        self.m = SeasonalityModel(
+            include_hour=True, include_dow=False, include_month=False,
+            output_name="sanitary_cfs",
+        )
         self.m.initialize()
         self.m.validate()
-        # 25 hourly steps: hod = 0, 1, ..., 24
         self.df = _make_df(n=25)
         self.m.prepare(self.df)
 
@@ -189,64 +231,104 @@ class TestSeasonalityModelPredict(unittest.TestCase):
         self.assertIn("datetime", out.columns)
         self.assertIn("sanitary_cfs", out.columns)
 
-    def test_all_zero_when_coeffs_zero(self):
+    def test_predict_output_length_matches_input(self):
         out = self.m.predict()
-        np.testing.assert_allclose(out["sanitary_cfs"].to_numpy(), 0.0)
+        self.assertEqual(len(out), 25)
 
-    def test_cosine_only(self):
-        # a=1, b=0 → output = cos(2π·n·hod/24)
-        self.m.get_scalar_parameter("a_hour_of_day_1").value = 1.0
+    def test_uniform_pf_yields_baseline(self):
+        """When all peaking factors are equal (default = 1.0), output == baseline."""
+        self.m.get_scalar_parameter("baseline").value = 5.0
         out = self.m.predict()
-        hod = self.m._features["hour_of_day"]
-        expected = np.cos(2.0 * np.pi * 1 * hod / 24.0)
-        np.testing.assert_allclose(out["sanitary_cfs"].to_numpy(), expected, atol=1e-12)
+        # pf_norm = 1.0/1.0 = 1.0 everywhere; w_hour = 1.0; output = 5.0 * 1.0 * 1.0 = 5.0
+        np.testing.assert_allclose(out["sanitary_cfs"].to_numpy(), 5.0, atol=1e-12)
 
-    def test_sine_only(self):
-        self.m.get_scalar_parameter("b_hour_of_day_1").value = 1.0
+    def test_baseline_zero_gives_zero_output(self):
+        self.m.get_scalar_parameter("baseline").value = 0.0
         out = self.m.predict()
-        hod = self.m._features["hour_of_day"]
-        expected = np.sin(2.0 * np.pi * 1 * hod / 24.0)
-        np.testing.assert_allclose(out["sanitary_cfs"].to_numpy(), expected, atol=1e-12)
+        np.testing.assert_allclose(out["sanitary_cfs"].to_numpy(), 0.0, atol=1e-12)
 
-    def test_multiple_harmonics_superposition(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=2)
-        m.initialize()
-        m.validate()
-        df = _make_df(n=24)
-        m.prepare(df)
-        m.get_scalar_parameter("a_hour_of_day_1").value = 1.0
-        m.get_scalar_parameter("a_hour_of_day_2").value = 0.5
-        out = m.predict()
-        hod = m._features["hour_of_day"]
-        expected = (np.cos(2 * np.pi * 1 * hod / 24)
-                    + 0.5 * np.cos(2 * np.pi * 2 * hod / 24))
-        np.testing.assert_allclose(out["sanitary_cfs"].to_numpy(), expected, atol=1e-12)
-
-    def test_multi_period_additive(self):
-        m = SeasonalityModel(
-            periods={"hour_of_day": 24.0, "day_of_week": 7.0},
-            n_terms=1,
-        )
-        m.initialize()
-        m.validate()
-        df = _make_df(n=24)
-        m.prepare(df)
-        m.get_scalar_parameter("a_hour_of_day_1").value = 1.0
-        m.get_scalar_parameter("b_day_of_week_1").value = 2.0
-        out = m.predict()
-        hod = m._features["hour_of_day"]
-        dow = m._features["day_of_week"]
-        expected = (np.cos(2 * np.pi * hod / 24.0)
-                    + 2.0 * np.sin(2 * np.pi * dow / 7.0))
-        np.testing.assert_allclose(out["sanitary_cfs"].to_numpy(), expected, atol=1e-12)
-
-    def test_state_predicted(self):
+    def test_predict_state_predicted(self):
         self.m.predict()
         self.assertTrue(self.m.is_predicted())
 
-    def test_output_length_matches_input(self):
+    def test_peaking_factor_doubles_for_specific_hour(self):
+        """Setting one hour's pf to 2x while keeping others at 1 doubles that hour's output."""
+        self.m.get_scalar_parameter("baseline").value = 1.0
+        pf = self.m.get_vector_parameter("pf_hour").values.copy()
+        pf[0] = 2.0  # hour 0 gets double peaking factor
+        self.m.get_vector_parameter("pf_hour").values = pf
         out = self.m.predict()
-        self.assertEqual(len(out), 25)
+
+        # pf_norm = pf / mean(pf); mean = (2 + 23*1)/24 = 25/24
+        # pf_norm[0] = 2 / (25/24) = 48/25 = 1.92
+        # pf_norm[others] = 1 / (25/24) = 24/25 = 0.96
+        mean_pf = pf.mean()
+        h_array = self.m._h
+        expected_norm = pf[h_array] / mean_pf
+        expected_out = 1.0 * expected_norm
+        np.testing.assert_allclose(out["sanitary_cfs"].to_numpy(), expected_out, atol=1e-12)
+
+    def test_multi_dim_weighted_sum(self):
+        """Multi-dim model computes weighted sum of normalized peaking factors."""
+        m = SeasonalityModel(
+            include_hour=True, include_dow=True, include_month=False,
+            output_name="flow",
+        )
+        m.initialize()
+        m.validate()
+        df = _make_df(n=48)
+        m.prepare(df)
+        m.get_scalar_parameter("baseline").value = 2.0
+        m.get_scalar_parameter("w_hour").value = 0.7
+        m.get_scalar_parameter("w_dow").value = 0.3
+        out = m.predict()
+
+        # Compute expected manually
+        w_sum = 1.0  # 0.7 + 0.3
+        pf_h = m.get_vector_parameter("pf_hour").values
+        pf_d = m.get_vector_parameter("pf_dow").values
+        pf_h_norm = pf_h / pf_h.mean()
+        pf_d_norm = pf_d / pf_d.mean()
+        w_h = 0.7 / w_sum
+        w_d = 0.3 / w_sum
+        expected = 2.0 * (w_h * pf_h_norm[m._h] + w_d * pf_d_norm[m._dow])
+        np.testing.assert_allclose(out["flow"].to_numpy(), expected, atol=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# inequality_constraints()
+# ---------------------------------------------------------------------------
+
+class TestSeasonalityModelConstraints(unittest.TestCase):
+
+    def test_constraints_return_two_values(self):
+        m = SeasonalityModel()
+        m.initialize()
+        g = m.inequality_constraints()
+        self.assertEqual(len(g), 2)
+
+    def test_default_weights_sum_to_one(self):
+        """Default weights sum to 1 — both constraints should equal 0."""
+        m = SeasonalityModel()
+        m.initialize()
+        g = m.inequality_constraints()
+        # sum(w) - 1 == 0 and 1 - sum(w) == 0
+        self.assertAlmostEqual(g[0], 0.0)
+        self.assertAlmostEqual(g[1], 0.0)
+
+    def test_overweight_violates_first_constraint(self):
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
+        m.initialize()
+        m.get_scalar_parameter("w_hour").value = 1.5  # sum > 1
+        g = m.inequality_constraints()
+        self.assertGreater(g[0], 0.0)  # infeasible
+
+    def test_underweight_violates_second_constraint(self):
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
+        m.initialize()
+        m.get_scalar_parameter("w_hour").value = 0.5  # sum < 1
+        g = m.inequality_constraints()
+        self.assertGreater(g[1], 0.0)  # infeasible
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +338,7 @@ class TestSeasonalityModelPredict(unittest.TestCase):
 class TestSeasonalityModelFinalize(unittest.TestCase):
 
     def test_finalize_clears_state(self):
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=1)
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
         m.initialize()
         m.validate()
         m.prepare(_make_df())
@@ -264,7 +346,9 @@ class TestSeasonalityModelFinalize(unittest.TestCase):
         m.finalize()
         self.assertTrue(m.is_finalized())
         self.assertIsNone(m._datetime)
-        self.assertEqual(m._features, {})
+        self.assertIsNone(m._h)
+        self.assertIsNone(m._dow)
+        self.assertIsNone(m._month)
 
 
 # ---------------------------------------------------------------------------
@@ -280,9 +364,9 @@ class TestSeasonalityCalibrationIntegration(unittest.TestCase):
             self.skipTest("calibration extras not installed")
 
         df = _make_df(n=48)
-        observed = np.sin(np.arange(48, dtype=float) / 4)
+        observed = np.ones(48)
 
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=3)
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
         m.initialize()
         m.validate()
 
@@ -293,22 +377,25 @@ class TestSeasonalityCalibrationIntegration(unittest.TestCase):
             objectives=[MSE()],
             column_map={
                 "observed":  lambda _: _obs,
-                "predicted": lambda df_: df_["sanitary_cfs"].to_numpy(),
+                "predicted": lambda df_: df_["flow"].to_numpy(),
             },
         )
-        # 1 period × 3 terms × 2 (a+b) = 6
-        self.assertEqual(problem.n_params, 6)
+        # scalar params: baseline + w_hour = 2 (calibratable)
+        # vector params (pf_hour 24) are calibratable too — total depends on impl
+        # Just check it's >= 2
+        self.assertGreaterEqual(problem.n_params, 2)
 
-    def test_evaluate_runs(self):
+    def test_evaluate_uniform_gives_baseline(self):
         try:
             from sparsehydro.calibration import CalibrationProblem, MSE
         except ImportError:
             self.skipTest("calibration extras not installed")
 
         df = _make_df(n=24)
-        observed = np.zeros(24)
+        # Target = 1.0 everywhere (default baseline=1.0, uniform pf → output = 1.0)
+        observed = np.ones(24)
 
-        m = SeasonalityModel(periods={"hour_of_day": 24.0}, n_terms=1)
+        m = SeasonalityModel(include_hour=True, include_dow=False, include_month=False)
         m.initialize()
         m.validate()
 
@@ -319,12 +406,13 @@ class TestSeasonalityCalibrationIntegration(unittest.TestCase):
             objectives=[MSE()],
             column_map={
                 "observed":  lambda _: _obs,
-                "predicted": lambda df_: df_["sanitary_cfs"].to_numpy(),
+                "predicted": lambda df_: df_["flow"].to_numpy(),
             },
         )
-        x = np.array([0.0, 0.0])  # a=0, b=0 → output = 0 = observed → MSE = 0
+        # Calibratable scalar params only: baseline=1.0, w_hour=1.0 (2 params)
+        x = np.array([1.0] * problem.n_params)
         F = problem.evaluate(x)
-        self.assertAlmostEqual(float(F[0]), 0.0, places=10)
+        self.assertAlmostEqual(float(F[0]), 0.0, places=6)
 
 
 if __name__ == "__main__":

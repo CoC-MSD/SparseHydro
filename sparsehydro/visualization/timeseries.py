@@ -152,6 +152,12 @@ try:
         pred = np.asarray(predicted, dtype=float)
         residuals = obs - pred
 
+        # Goodness-of-fit metrics for the 1v1 panel
+        r = float(np.corrcoef(obs, pred)[0, 1])
+        ss_res = float(np.sum((obs - pred) ** 2))
+        ss_tot = float(np.sum((obs - obs.mean()) ** 2))
+        nse = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
         max_lags = min(30, len(residuals) - 1)
         std = np.std(residuals)
         if std == 0:
@@ -202,6 +208,18 @@ try:
         )
         fig.update_xaxes(title_text=f"Observed {flow_label}", row=1, col=1)
         fig.update_yaxes(title_text=f"Predicted {flow_label}", row=1, col=1)
+        fig.add_annotation(
+            xref="x domain", yref="y domain",
+            x=0.05, y=0.95,
+            text=f"r = {r:.3f}<br>NSE = {nse:.3f}",
+            showarrow=False,
+            align="left",
+            bgcolor="rgba(255,255,255,0.7)",
+            bordercolor="grey",
+            borderwidth=1,
+            font=dict(size=12),
+            row=1, col=1,
+        )
 
         # Row 2 — residual bars
         fig.add_trace(
@@ -520,11 +538,12 @@ try:
     ) -> "go.Figure":
         """Two-row calibration dashboard with linked time axes.
 
-        **Row 1 (full width)** — Exogenous inputs.  All entries in *exogenous*
-        that share the same ``units`` string are overlaid on one y-axis; each
-        unique unit gets its own secondary/tertiary axis.  Traces whose label
-        contains "rain" or "precip" (case-insensitive) are rendered as **inverted
-        bars** (downward); everything else is a line.
+        **Row 1 (full width)** — Exogenous inputs.  Every entry in *exogenous*
+        is normalised to [0, 1] and overlaid on a single shared y-axis.  The
+        legend label for each trace includes the original value range and units
+        (e.g. ``Rainfall [0-12.3 mm]``).  Traces whose label contains "rain"
+        or "precip" (case-insensitive) are rendered as bars; everything else is
+        a line.
 
         **Row 2 Left** — Predicted vs Observed time series.  If
         *pareto_predictions* is supplied, a shaded IQR band (between
@@ -534,7 +553,7 @@ try:
         *pareto_predictions* is supplied, vertical box-whiskers summarise the
         Pareto range at each time step.  A dashed 45° "perfect fit" line is
         always drawn.  Optional *tolerance_angles* draw additional lines
-        radiating from the origin at ``45° ± θ``.
+        radiating from the origin at ``45° +/- theta``.
 
         The x-axes of row 1 and row 2-left are **linked**: zooming or panning
         either panel pans the other.
@@ -544,8 +563,8 @@ try:
         :param observed: 1-D array of observed values.
         :param predicted: 1-D array of predicted values (best solution).
         :param exogenous: ``{label: (values_array, units_string)}`` mapping.
-            Traces with the same *units_string* share a y-axis.  Rainfall-like
-            traces (label contains "rain" / "precip") are plotted as inverted bars.
+            All traces are normalised to [0, 1] on a shared y-axis.  Rainfall-like
+            traces (label contains "rain" / "precip") are plotted as bars.
         :param pareto_predictions: Array of shape ``(n_solutions, n_timesteps)``
             containing all Pareto-front predictions.  Used for the IQR band and
             scatter box-whiskers.
@@ -562,45 +581,56 @@ try:
         predicted = np.asarray(predicted, dtype=float)
         dt_series = pd.to_datetime(datetime)
 
+        # Goodness-of-fit metrics for the 1v1 panel
+        _r = float(np.corrcoef(observed, predicted)[0, 1])
+        _ss_res = float(np.sum((observed - predicted) ** 2))
+        _ss_tot = float(np.sum((observed - observed.mean()) ** 2))
+        _nse = 1.0 - _ss_res / _ss_tot if _ss_tot > 0 else float("nan")
+
         exogenous = exogenous or {}
 
         # ── Build subplot grid ───────────────────────────────────────────
+        # Col 1 (65 %): Row 1 = Exogenous, Row 2 = Time series
+        # Col 2 (35 %): Rows 1-2 = 1:1 Scatter (rowspan=2)
+        #
+        # Plotly axis numbering (reading order, skipping None):
+        #   (1,1) → xaxis,  yaxis   — Exogenous
+        #   (1,2) → xaxis2, yaxis2  — Scatter (rowspan=2)
+        #   (2,1) → xaxis3, yaxis3  — Time series
         fig = make_subplots(
             rows=2, cols=2,
             column_widths=[0.65, 0.35],
             row_heights=[0.35, 0.65],
             specs=[
-                [{"colspan": 2}, None],
-                [{},             {}],
+                [{},  {"rowspan": 2}],
+                [{},  None          ],
             ],
             shared_xaxes=False,
             vertical_spacing=0.08,
             horizontal_spacing=0.08,
-            subplot_titles=["Exogenous Inputs", "Predicted vs Observed", "1:1 Scatter"],
+            subplot_titles=["Exogenous Inputs", "1:1 Scatter", "Predicted vs Observed"],
         )
 
-        # ── Row 1: exogenous traces ──────────────────────────────────────
-        # Group by units → shared axis index
-        unit_to_axis: dict[str, int] = {}
-        axis_idx = 1  # yaxis on row-1 subplot; extra axes are overlaid
-
+        # ── Row 1, Col 1: exogenous traces ──────────────────────────────
+        # All inputs are normalized to [0, 1] and share a single y-axis.
+        # The legend label carries the original min–max range and units.
         for label, (values, units) in exogenous.items():
             values = np.asarray(values, dtype=float)
             is_rain = any(kw in label.lower() for kw in ("rain", "precip")) or \
                       any(kw in rainfall_label.lower() for kw in ("rain", "precip"))
 
-            if units not in unit_to_axis:
-                unit_to_axis[units] = axis_idx
-                axis_idx += 1
+            v_min, v_max = float(np.nanmin(values)), float(np.nanmax(values))
+            v_range = v_max - v_min
+            normalized = (values - v_min) / v_range if v_range > 0 else np.zeros_like(values)
 
-            yref = "y" if unit_to_axis[units] == 1 else f"y{unit_to_axis[units]}"
+            range_str = f"{v_min:.3g}–{v_max:.3g}"
+            full_label = f"{label} [{range_str} {units}]" if units else f"{label} [{range_str}]"
 
             if is_rain:
                 fig.add_trace(
                     go.Bar(
-                        x=dt_series, y=-values,
-                        name=label,
-                        yaxis=yref,
+                        x=dt_series, y=normalized,
+                        name=full_label,
                         marker_opacity=0.7,
                         showlegend=True,
                     ),
@@ -609,14 +639,15 @@ try:
             else:
                 fig.add_trace(
                     go.Scatter(
-                        x=dt_series, y=values,
-                        mode="lines", name=label,
-                        yaxis=yref,
+                        x=dt_series, y=normalized,
+                        mode="lines", name=full_label,
                     ),
                     row=1, col=1,
                 )
 
-        # ── Row 2 Left: predicted vs observed time series ────────────────
+        fig.update_yaxes(title_text="Normalized [0–1]", range=[0, 1], row=1, col=1)
+
+        # ── Row 2, Col 1: predicted vs observed time series ─────────────
         if pareto_predictions is not None:
             pp = np.asarray(pareto_predictions, dtype=float)
             lo = np.percentile(pp, confidence_percentiles[0], axis=0)
@@ -641,11 +672,11 @@ try:
         )
         fig.add_trace(
             go.Scatter(x=dt_series, y=predicted, mode="lines",
-                       name=predicted_label, line=dict(color="#1f77b4", dash="dash")),
+                       name=predicted_label, line=dict(color="#1f77b4")),
             row=2, col=1,
         )
 
-        # ── Row 2 Right: 1v1 scatter ─────────────────────────────────────
+        # ── Rows 1-2, Col 2: 1v1 scatter ────────────────────────────────
         max_val = float(np.nanmax([observed, predicted]))
 
         # Pareto box-whiskers
@@ -662,7 +693,7 @@ try:
                         showlegend=False,
                         boxpoints=False,
                     ),
-                    row=2, col=2,
+                    row=1, col=2,
                 )
 
         # Best solution markers
@@ -673,7 +704,7 @@ try:
                 name="Best solution",
                 marker=dict(color="#1f77b4", size=5, opacity=0.7),
             ),
-            row=2, col=2,
+            row=1, col=2,
         )
 
         # 45° perfect-fit line
@@ -684,7 +715,7 @@ try:
                 name="Perfect fit (45°)",
                 line=dict(color="black", dash="dash", width=1.5),
             ),
-            row=2, col=2,
+            row=1, col=2,
         )
 
         # Tolerance angle lines
@@ -702,20 +733,34 @@ try:
                         name=f"45°{label_suffix}{theta}°",
                         line=dict(color=color, dash="dot", width=1),
                     ),
-                    row=2, col=2,
+                    row=1, col=2,
                 )
 
-        # ── Link x-axes of row-1 and row-2-left ──────────────────────────
+        # ── Synchronize time axes; rangeslider on the bottom time panel ──
+        # xaxis  (row 1, col 1) = Exogenous  → follows xaxis3
+        # xaxis3 (row 2, col 1) = Time series → carries the rangeslider
+        # xaxis2 (row 1, col 2) = Scatter     → independent (static)
         fig.update_layout(
             title_text=title,
-            xaxis2=dict(matches="x"),
             barmode="overlay",
             legend=dict(groupclick="toggleitem"),
-            height=700,
+            height=750,
+            xaxis=dict(matches="x3"),
+            xaxis3=dict(rangeslider=dict(visible=True, thickness=0.05)),
         )
-        fig.update_yaxes(title_text="", row=2, col=2)
-        fig.update_xaxes(title_text="Observed", row=2, col=2)
-        fig.update_yaxes(title_text="Predicted", row=2, col=2)
+        fig.update_xaxes(title_text="Observed",  row=1, col=2)
+        fig.update_yaxes(title_text="Predicted", row=1, col=2)
+        fig.add_annotation(
+            xref="x2 domain", yref="y2 domain",
+            x=0.05, y=0.95,
+            text=f"r = {_r:.3f}<br>NSE = {_nse:.3f}",
+            showarrow=False,
+            align="left",
+            bgcolor="rgba(255,255,255,0.7)",
+            bordercolor="grey",
+            borderwidth=1,
+            font=dict(size=12),
+        )
 
         return fig
 
@@ -1015,6 +1060,209 @@ try:
         )
         return fig
 
+    # ------------------------------------------------------------------
+    # plot_ensemble_components
+    # ------------------------------------------------------------------
+
+    def plot_ensemble_components(
+        datetime,
+        rainfall,
+        observed: np.ndarray,
+        pred_df: pd.DataFrame,
+        aliases: list,
+        output_name: str = "ensemble_output",
+        pareto_predictions: "np.ndarray | None" = None,
+        confidence_percentiles: tuple = (10, 90),
+        component_labels: "dict | None" = None,
+        observed_label: str = "Observed",
+        rainfall_label: str = "Rainfall [mm]",
+        flow_label: str = "Flow",
+        title: str = "Ensemble Components",
+    ) -> "go.Figure":
+        """Multi-panel figure: rainfall | component signals | combined + Pareto band.
+
+        Three rows sharing a common X-axis (two when *rainfall* is ``None``):
+
+        * **Row 1** — Rainfall bars (inverted axis).  Omitted when *rainfall* is
+          ``None``.
+        * **Row 2** — Individual component signals, one filled-area trace per alias.
+          Components share a common Y-axis so their magnitudes can be compared
+          directly (not stacked).
+        * **Row 3** — Combined predicted signal (dashed), observed (solid black), and
+          an optional Pareto uncertainty band (shaded IQR between
+          *confidence_percentiles*).  Component outlines (thin dotted) are also
+          repeated here to show each contribution in context.
+
+        :param datetime: 1-D time axis aligned with *observed*.
+        :param rainfall: Rainfall array, or ``None`` to omit the top panel.
+        :param observed: 1-D observed flow array.
+        :param pred_df: Output of
+            :meth:`~sparsehydro.ensemble.EnsembleModel.predict`, containing
+            ``{alias}_output`` columns and *output_name*.
+        :param aliases: List of alias strings (e.g. ``["rdii", "seas"]``).
+        :param output_name: Column name for the combined output in *pred_df*.
+        :param pareto_predictions: Array of shape ``(n_solutions, n_timesteps)``
+            of combined-output predictions for all Pareto-front solutions.
+            Produced by
+            :meth:`~sparsehydro.ensemble.EnsembleModel.collect_pareto_predictions`.
+            When supplied, a shaded band is drawn in Row 3.
+        :param confidence_percentiles: ``(lower_pct, upper_pct)`` for the band.
+        :param component_labels: ``{alias: display_label}`` overrides.  Missing
+            aliases default to the alias string (title-cased).
+        :param observed_label: Legend label for the observed trace.
+        :param rainfall_label: Rainfall panel label.
+        :param flow_label: Y-axis label for component and combined panels.
+        :param title: Figure title.
+        :returns: Plotly Figure with 2–3 rows, shared X-axis.
+        :rtype: plotly.graph_objects.Figure
+        """
+        observed = np.asarray(observed, dtype=float)
+        has_rain = rainfall is not None
+        labels = component_labels or {}
+
+        _COLORS = [
+            ("#1f77b4", "rgba(31,119,180,0.18)"),
+            ("#2ca02c", "rgba(44,160,44,0.18)"),
+            ("#ff7f0e", "rgba(255,127,14,0.18)"),
+            ("#9467bd", "rgba(148,103,189,0.18)"),
+            ("#8c564b", "rgba(140,86,75,0.18)"),
+        ]
+
+        if has_rain:
+            n_rows = 3
+            row_heights = [0.13, 0.37, 0.50]
+            subplot_titles = [rainfall_label, "Component Signals", "Combined vs Observed"]
+        else:
+            n_rows = 2
+            row_heights = [0.40, 0.60]
+            subplot_titles = ["Component Signals", "Combined vs Observed"]
+
+        fig = make_subplots(
+            rows=n_rows, cols=1,
+            shared_xaxes=True,
+            row_heights=row_heights,
+            vertical_spacing=0.04,
+            subplot_titles=subplot_titles,
+        )
+
+        comp_row = 2 if has_rain else 1
+        comb_row = 3 if has_rain else 2
+
+        pred_dt = pred_df["datetime"] if "datetime" in pred_df.columns else datetime
+
+        # ── Row 1: Rainfall ──────────────────────────────────────────────
+        if has_rain:
+            fig.add_trace(
+                go.Bar(
+                    x=datetime,
+                    y=np.asarray(rainfall, dtype=float),
+                    name=rainfall_label,
+                    marker_color="steelblue",
+                    opacity=0.7,
+                    showlegend=False,
+                ),
+                row=1, col=1,
+            )
+            fig.update_yaxes(autorange="reversed", title_text=rainfall_label, row=1, col=1)
+
+        # ── Row 2: Individual component signals ──────────────────────────
+        for i, alias in enumerate(aliases):
+            col_name = f"{alias}_output"
+            if col_name not in pred_df.columns:
+                continue
+            line_color, fill_color = _COLORS[i % len(_COLORS)]
+            label = labels.get(alias, alias.replace("_", " ").title())
+            fig.add_trace(
+                go.Scatter(
+                    x=pred_dt,
+                    y=pred_df[col_name].to_numpy(dtype=float),
+                    mode="lines",
+                    name=label,
+                    line=dict(color=line_color, width=1.5),
+                    fill="tozeroy",
+                    fillcolor=fill_color,
+                    legendgroup=alias,
+                ),
+                row=comp_row, col=1,
+            )
+        fig.update_yaxes(title_text=flow_label, row=comp_row, col=1)
+
+        # ── Row 3: Combined + Pareto band + observed ─────────────────────
+        if pareto_predictions is not None:
+            pp = np.asarray(pareto_predictions, dtype=float)
+            lo = np.percentile(pp, confidence_percentiles[0], axis=0)
+            hi = np.percentile(pp, confidence_percentiles[1], axis=0)
+            dt_arr = np.asarray(pred_dt)
+            fig.add_trace(
+                go.Scatter(
+                    x=np.concatenate([dt_arr, dt_arr[::-1]]),
+                    y=np.concatenate([hi, lo[::-1]]),
+                    fill="toself",
+                    fillcolor="rgba(220,50,50,0.12)",
+                    line=dict(color="rgba(0,0,0,0)"),
+                    name=(
+                        f"Pareto band "
+                        f"({confidence_percentiles[0]}–{confidence_percentiles[1]}%)"
+                    ),
+                    showlegend=True,
+                ),
+                row=comb_row, col=1,
+            )
+
+        # Component outlines (thin dotted) for context in the combined panel
+        for i, alias in enumerate(aliases):
+            col_name = f"{alias}_output"
+            if col_name not in pred_df.columns:
+                continue
+            line_color, _ = _COLORS[i % len(_COLORS)]
+            label = labels.get(alias, alias.replace("_", " ").title())
+            fig.add_trace(
+                go.Scatter(
+                    x=pred_dt,
+                    y=pred_df[col_name].to_numpy(dtype=float),
+                    mode="lines",
+                    name=label,
+                    line=dict(color=line_color, width=1, dash="dot"),
+                    showlegend=False,
+                    legendgroup=alias,
+                ),
+                row=comb_row, col=1,
+            )
+
+        if output_name in pred_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=pred_dt,
+                    y=pred_df[output_name].to_numpy(dtype=float),
+                    mode="lines",
+                    name="Predicted (total)",
+                    line=dict(color="crimson", width=2, dash="dash"),
+                ),
+                row=comb_row, col=1,
+            )
+
+        fig.add_trace(
+            go.Scatter(
+                x=datetime,
+                y=observed,
+                mode="lines",
+                name=observed_label,
+                line=dict(color="black", width=1.5),
+            ),
+            row=comb_row, col=1,
+        )
+        fig.update_yaxes(title_text=flow_label, row=comb_row, col=1)
+        fig.update_xaxes(title_text="Date / Time", row=comb_row, col=1)
+
+        fig.update_layout(
+            title=title,
+            height=700,
+            hovermode="x unified",
+            legend=dict(x=1.02, y=1.0),
+            barmode="overlay",
+        )
+        return fig
+
 except ImportError:
 
     def plot_timeseries(*args, **kwargs):  # type: ignore[misc]
@@ -1034,6 +1282,9 @@ except ImportError:
 
     def plot_ensemble_timeseries(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_ensemble_timeseries. Install with: pip install plotly")
+
+    def plot_ensemble_components(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_ensemble_components. Install with: pip install plotly")
 
     class VisualizationModel(IModel):  # type: ignore[no-redef]
         model_name = "visualization"

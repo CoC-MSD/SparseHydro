@@ -56,11 +56,14 @@ try:
                 )
 
     class _GenerationCallback(Callback):
-        """Appends a GenerationRecord to history after each generation."""
+        """Appends a GenerationRecord to history and fires the user callback."""
 
-        def __init__(self) -> None:
+        def __init__(self, user_callback=None, objective_names=None, minimize_flags=None) -> None:
             super().__init__()
             self.history: list[GenerationRecord] = []
+            self._user_callback = user_callback
+            self._objective_names = objective_names or []
+            self._minimize_flags = minimize_flags or []
 
         def notify(self, algorithm) -> None:  # type: ignore[override]
             pop = algorithm.pop
@@ -68,17 +71,28 @@ try:
             F = pop.get("F").copy()
             try:
                 ranks = pop.get("rank")
-                n_pareto = int(np.sum(ranks == 0))
+                pareto_mask = ranks == 0
+                n_pareto = int(np.sum(pareto_mask))
             except Exception:
-                n_pareto = int(np.sum(_identify_pareto(F)))
-            self.history.append(
-                GenerationRecord(
-                    generation=int(algorithm.n_gen),
-                    X=X,
-                    F=F,
-                    n_pareto=n_pareto,
-                )
-            )
+                pareto_mask = _identify_pareto(F)
+                n_pareto = int(np.sum(pareto_mask))
+
+            gen = int(algorithm.n_gen)
+            self.history.append(GenerationRecord(generation=gen, X=X, F=F, n_pareto=n_pareto))
+
+            if self._user_callback is not None:
+                try:
+                    n_evals = int(algorithm.evaluator.n_eval)
+                except Exception:
+                    n_evals = gen * len(X)
+                self._user_callback({
+                    "generation": gen,
+                    "n_evals": n_evals,
+                    "n_pareto": n_pareto,
+                    "pareto_F": F[pareto_mask],
+                    "objective_names": self._objective_names,
+                    "minimize_flags": self._minimize_flags,
+                })
 
     class NSGAIISolver(ISolver):
         """Multi-objective NSGA-II calibration solver.
@@ -103,19 +117,21 @@ try:
             seed: int | None = 42,
             verbose: bool = False,
             n_jobs: int = 1,
+            callback=None,
         ) -> None:
             self.pop_size = pop_size
             self.n_gen = n_gen
             self.seed = seed
             self.verbose = verbose
             self.n_jobs = n_jobs
+            self.callback = callback
 
         def solve(self, problem: "CalibrationProblem", **kwargs) -> CalibrationResult:
             """Run NSGA-II and return a :class:`~sparsehydro.calibration.result.CalibrationResult`.
 
             :param problem: Calibration problem wrapping model + data + objectives.
             :param kwargs: Per-call overrides: ``pop_size``, ``n_gen``, ``seed``,
-                ``verbose``, ``n_jobs``.
+                ``verbose``, ``n_jobs``, ``callback``.
             :returns: Result with per-generation history and final Pareto front.
             :rtype: CalibrationResult
             """
@@ -124,6 +140,7 @@ try:
             seed     = kwargs.get("seed",     self.seed)
             verbose  = kwargs.get("verbose",  self.verbose)
             n_jobs   = kwargs.get("n_jobs",   self.n_jobs)
+            callback = kwargs.get("callback", self.callback)
 
             worker_problem = problem.make_copy()
             pymoo_problem = _PymooAdapter(worker_problem)
@@ -139,7 +156,11 @@ try:
                 except Exception:
                     pass  # fall back to sequential
 
-            callback = _GenerationCallback()
+            callback = _GenerationCallback(
+                user_callback=callback,
+                objective_names=problem.objective_names,
+                minimize_flags=problem.minimize_flags,
+            )
             algorithm = NSGA2(
                 pop_size=pop_size,
                 sampling=FloatRandomSampling(),

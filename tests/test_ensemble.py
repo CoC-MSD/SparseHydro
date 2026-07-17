@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from sparsehydro.ensemble import EnsembleModel
+from sparsehydro.models import EnsembleModel
 from sparsehydro.enums import ModelState
 from sparsehydro.interfaces import IModel
 from sparsehydro.parameters import ConstraintRecord, ScalarParameter
