@@ -1,4 +1,4 @@
-"""Tests for data.utilities — unittest.TestCase."""
+"""Tests for sparsehydro.data.utilities — unittest.TestCase."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from data.utilities import add_time_features, read_tsf
+from sparsehydro.data.utilities import add_time_features, read_tsf
 
 
 _STORM_TSF = (

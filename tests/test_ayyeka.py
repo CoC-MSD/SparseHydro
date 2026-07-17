@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from data.services.ayyeka import AyyekaClient, Site, Stream, _haversine_km
+from sparsehydro.data.services.ayyeka import AyyekaClient, Site, Stream, _haversine_km
 
 
 class FakeResponse:

@@ -1,4 +1,4 @@
-"""Tests for data.services.flowfinity — unittest.TestCase.
+"""Tests for sparsehydro.data.services.flowfinity — unittest.TestCase.
 
 All HTTP interaction is mocked via an injected fake session; no network access
 occurs.
@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 
 import pandas as pd
 
-from data.services.flowfinity import DownloadResult, FlowFinityClient
+from sparsehydro.data.services.flowfinity import DownloadResult, FlowFinityClient
 
 
 # ---------------------------------------------------------------------------
