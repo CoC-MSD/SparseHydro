@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, dev]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
 
 permissions:
   contents: read
@@ -34,14 +34,20 @@ jobs:
         run: sphinx-build -b html docs docs/_build/html -W --keep-going
 
       - name: Upload Pages artifact
-        if: github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs/_build/html
 
+      - name: Upload documentation for PR preview
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation-preview
+          path: docs/_build/html
+          retention-days: 7
+
   deploy:
     needs: build
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev') && github.event_name == 'push'
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
