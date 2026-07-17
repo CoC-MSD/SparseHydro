@@ -252,4 +252,3 @@ drives the model and objectives on every evaluation.
 
    getting_started
    api
-   QAQC
