@@ -1327,6 +1327,278 @@ try:
         )
         return fig
 
+    # ------------------------------------------------------------------
+    # plot_ensemble_members_vs_observed
+    # ------------------------------------------------------------------
+
+    def plot_ensemble_members_vs_observed(
+        datetime,
+        observed: np.ndarray,
+        pred_df: pd.DataFrame,
+        aliases: list,
+        output_name: str = "ensemble_output",
+        rainfall=None,
+        component_labels: "dict | None" = None,
+        observed_label: str = "Observed",
+        rainfall_label: str = "Rainfall [mm]",
+        flow_label: str = "Flow",
+        title: str = "Ensemble Members vs Observed",
+    ) -> "go.Figure":
+        """Small-multiples grid: each ensemble member vs. the observed target, plus combined.
+
+        One row per alias overlays that component's ``{alias}_output`` series with
+        the observed target, followed by a final row for the combined
+        *output_name* series vs. observed.  This differs from
+        :func:`plot_ensemble_components`, which overlays members with each other
+        (not against observed) and only shows the combined series vs. observed —
+        here every row repeats the observed trace so each member's individual fit
+        can be judged directly.
+
+        :param datetime: 1-D time axis aligned with *observed*.
+        :type datetime: array-like
+        :param observed: 1-D observed flow array.
+        :type observed: numpy.ndarray
+        :param pred_df: Output of
+            :meth:`~sparsehydro.models.EnsembleModel.predict`, containing
+            ``{alias}_output`` columns and *output_name*.
+        :type pred_df: pandas.DataFrame
+        :param aliases: List of alias strings — one row per alias.
+        :type aliases: list[str]
+        :param output_name: Column name for the combined output in *pred_df*.
+        :type output_name: str
+        :param rainfall: Optional rainfall array for a shared top panel.
+        :type rainfall: numpy.ndarray or None
+        :param component_labels: ``{alias: display_label}`` overrides.  Missing
+            aliases default to the alias string (title-cased).
+        :type component_labels: dict or None
+        :param observed_label: Legend label for the observed trace.
+        :type observed_label: str
+        :param rainfall_label: Rainfall panel label.
+        :type rainfall_label: str
+        :param flow_label: Y-axis label for all flow panels.
+        :type flow_label: str
+        :param title: Figure title.
+        :type title: str
+        :returns: Plotly Figure with one row per member, one combined row, and
+            an optional leading rainfall row — all sharing the X-axis.
+        :rtype: plotly.graph_objects.Figure
+        """
+        observed = np.asarray(observed, dtype=float)
+        has_rain = rainfall is not None
+        labels = component_labels or {}
+
+        _COLORS = [
+            ("#1f77b4", "rgba(31,119,180,0.18)"),
+            ("#2ca02c", "rgba(44,160,44,0.18)"),
+            ("#ff7f0e", "rgba(255,127,14,0.18)"),
+            ("#9467bd", "rgba(148,103,189,0.18)"),
+            ("#8c564b", "rgba(140,86,75,0.18)"),
+        ]
+
+        n_members = len(aliases)
+        n_rows = n_members + 1 + (1 if has_rain else 0)
+
+        if has_rain:
+            row_heights = [0.12] + [0.88 / (n_members + 1)] * (n_members + 1)
+        else:
+            row_heights = [1.0 / (n_members + 1)] * (n_members + 1)
+
+        subplot_titles = [rainfall_label] if has_rain else []
+        for alias in aliases:
+            subplot_titles.append(labels.get(alias, alias.replace("_", " ").title()))
+        subplot_titles.append("Combined")
+
+        fig = make_subplots(
+            rows=n_rows, cols=1,
+            shared_xaxes=True,
+            row_heights=row_heights,
+            vertical_spacing=0.03,
+            subplot_titles=subplot_titles,
+        )
+
+        row_offset = 1
+        if has_rain:
+            fig.add_trace(
+                go.Bar(
+                    x=datetime,
+                    y=np.asarray(rainfall, dtype=float),
+                    name=rainfall_label,
+                    marker_color="steelblue",
+                    opacity=0.7,
+                    showlegend=False,
+                ),
+                row=1, col=1,
+            )
+            fig.update_yaxes(autorange="reversed", title_text=rainfall_label, row=1, col=1)
+            row_offset = 2
+
+        pred_dt = pred_df["datetime"] if "datetime" in pred_df.columns else datetime
+
+        for i, alias in enumerate(aliases):
+            row = row_offset + i
+            col_name = f"{alias}_output"
+            line_color, _ = _COLORS[i % len(_COLORS)]
+            label = labels.get(alias, alias.replace("_", " ").title())
+            fig.add_trace(
+                go.Scatter(
+                    x=datetime, y=observed,
+                    mode="lines", name=observed_label,
+                    line=dict(color="black", width=1.2),
+                    legendgroup="observed", showlegend=(i == 0),
+                ),
+                row=row, col=1,
+            )
+            if col_name in pred_df.columns:
+                fig.add_trace(
+                    go.Scatter(
+                        x=pred_dt, y=pred_df[col_name].to_numpy(dtype=float),
+                        mode="lines", name=label,
+                        line=dict(color=line_color, width=1.5),
+                    ),
+                    row=row, col=1,
+                )
+            fig.update_yaxes(title_text=flow_label, row=row, col=1)
+
+        comb_row = row_offset + n_members
+        fig.add_trace(
+            go.Scatter(
+                x=datetime, y=observed,
+                mode="lines", name=observed_label,
+                line=dict(color="black", width=1.2),
+                legendgroup="observed", showlegend=False,
+            ),
+            row=comb_row, col=1,
+        )
+        if output_name in pred_df.columns:
+            fig.add_trace(
+                go.Scatter(
+                    x=pred_dt, y=pred_df[output_name].to_numpy(dtype=float),
+                    mode="lines", name="Combined",
+                    line=dict(color="crimson", width=2, dash="dash"),
+                ),
+                row=comb_row, col=1,
+            )
+        fig.update_yaxes(title_text=flow_label, row=comb_row, col=1)
+        fig.update_xaxes(title_text="Date / Time", row=comb_row, col=1)
+
+        fig.update_layout(
+            title=title,
+            height=220 * n_rows,
+            hovermode="x unified",
+        )
+        return fig
+
+    # ------------------------------------------------------------------
+    # plot_one_to_one_band
+    # ------------------------------------------------------------------
+
+    def plot_one_to_one_band(
+        observed,
+        predicted,
+        band_pct: float = 10.0,
+        title: str = "1:1 Comparison",
+        observed_label: str = "Observed",
+        predicted_label: str = "Predicted",
+        flow_label: str = "Flow",
+    ) -> "go.Figure":
+        """CIWEM-style 1:1 scatter with a proportional +/- band tolerance wedge.
+
+        Draws the observed-vs-predicted point cloud, a dashed 45 degree
+        "perfect fit" line, and a shaded wedge bounded by
+        ``y = (1 - band_pct/100)*x`` and ``y = (1 + band_pct/100)*x`` — a band
+        that starts at the origin and widens proportionally with magnitude, per
+        common CIWEM-style flow-model acceptance criteria.  This differs from
+        the ``tolerance_angles`` option on :func:`plot_calibration_timeseries`,
+        which draws angular offsets from the 45 degree line rather than a fixed
+        percentage of the value.
+
+        :param observed: 1-D observed values.
+        :type observed: numpy.ndarray
+        :param predicted: 1-D predicted values, same length as *observed*.
+        :type predicted: numpy.ndarray
+        :param band_pct: Tolerance band half-width as a percentage of value
+            (e.g. ``10.0`` draws the wedge between +/-10% of the 1:1 line).
+        :type band_pct: float
+        :param title: Figure title.
+        :type title: str
+        :param observed_label: X-axis label.
+        :type observed_label: str
+        :param predicted_label: Y-axis label.
+        :type predicted_label: str
+        :param flow_label: Units/quantity label appended to axis titles.
+        :type flow_label: str
+        :returns: Plotly Figure with the 1:1 scatter and tolerance band.
+        :rtype: plotly.graph_objects.Figure
+        """
+        obs = np.asarray(observed, dtype=float)
+        pred = np.asarray(predicted, dtype=float)
+
+        r = float(np.corrcoef(obs, pred)[0, 1])
+        ss_res = float(np.sum((obs - pred) ** 2))
+        ss_tot = float(np.sum((obs - obs.mean()) ** 2))
+        nse = 1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan")
+
+        lo_slope = 1.0 - band_pct / 100.0
+        hi_slope = 1.0 + band_pct / 100.0
+        in_band = np.where(
+            obs > 0,
+            (pred >= lo_slope * obs) & (pred <= hi_slope * obs),
+            pred == 0,
+        )
+        pct_in_band = 100.0 * float(np.mean(in_band))
+
+        max_val = float(np.nanmax([obs.max(), pred.max(), 0.0]))
+
+        fig = go.Figure()
+
+        # Shaded wedge from the origin: (0,0) -> (max, lo*max) -> (max, hi*max)
+        fig.add_trace(go.Scatter(
+            x=[0, max_val, max_val, 0],
+            y=[0, lo_slope * max_val, hi_slope * max_val, 0],
+            fill="toself",
+            fillcolor="rgba(44,160,44,0.15)",
+            line=dict(color="rgba(0,0,0,0)"),
+            name=f"+/-{band_pct:g}% band",
+            showlegend=True,
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=[0, max_val], y=[0, max_val],
+            mode="lines", name="Perfect fit (45 deg)",
+            line=dict(color="black", dash="dash", width=1.5),
+        ))
+
+        marker_colors = np.where(in_band, "#2ca02c", "#d62728")
+        fig.add_trace(go.Scatter(
+            x=obs, y=pred,
+            mode="markers",
+            name="Solutions",
+            marker=dict(color=marker_colors, size=6, opacity=0.7),
+        ))
+
+        fig.update_xaxes(title_text=f"{observed_label} {flow_label}".strip())
+        fig.update_yaxes(title_text=f"{predicted_label} {flow_label}".strip())
+        fig.add_annotation(
+            xref="paper", yref="paper",
+            x=0.02, y=0.98,
+            text=(
+                f"r = {r:.3f}<br>NSE = {nse:.3f}<br>"
+                f"{pct_in_band:.1f}% within +/-{band_pct:g}%"
+            ),
+            showarrow=False,
+            align="left",
+            bgcolor="rgba(255,255,255,0.7)",
+            bordercolor="grey",
+            borderwidth=1,
+            font=dict(size=12),
+        )
+        fig.update_layout(
+            title=title,
+            height=600,
+            width=650,
+        )
+        return fig
+
 except ImportError:
 
     def plot_timeseries(*args, **kwargs):  # type: ignore[misc]
@@ -1349,6 +1621,14 @@ except ImportError:
 
     def plot_ensemble_components(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_ensemble_components. Install with: pip install plotly")
+
+    def plot_ensemble_members_vs_observed(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError(
+            "plotly is required for plot_ensemble_members_vs_observed. Install with: pip install plotly"
+        )
+
+    def plot_one_to_one_band(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_one_to_one_band. Install with: pip install plotly")
 
     class VisualizationModel(IModel):  # type: ignore[no-redef]
         model_name = "visualization"

@@ -9,6 +9,7 @@ without knowing the internal model structure.
 from __future__ import annotations
 
 import inspect
+import re
 from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
@@ -17,6 +18,9 @@ import pandas as pd
 
 from ..enums import ModelState
 from ..parameters import ConstraintRecord, FieldRecord, ScalarParameter, VectorParameter
+
+# Matches a flattened vector-parameter element name, e.g. "pf_dow[3]" -> ("pf_dow", 3).
+_FLAT_VECTOR_INDEX_RE = re.compile(r"^(.+)\[(\d+)\]$")
 
 
 class IModel(ABC):
@@ -398,6 +402,62 @@ class IModel(ABC):
             self._scalar_parameters[name].value = float(value)
             applied.append(name)
         return applied
+
+    def apply_flat_parameter(self, name: str, value: float) -> None:
+        """Apply one value from a flattened calibration search vector.
+
+        Dispatches on the parameter name's shape: a plain name (e.g.
+        ``"HHL"``) is treated as a scalar parameter; a name with a trailing
+        index (e.g. ``"pf_dow[3]"``, as produced by
+        :class:`~sparsehydro.calibration.CalibrationProblem` for
+        :class:`~sparsehydro.parameters.VectorParameter` elements) sets that
+        single element of the named vector parameter in-place.
+
+        :param name: Scalar parameter name, or ``"{vector_name}[{index}]"``.
+        :type name: str
+        :param value: New value to assign.
+        :type value: float
+        :returns: Nothing.
+        :rtype: None
+        :raises KeyError: If the named scalar or vector parameter is not
+            registered, or *index* is out of range for the vector parameter.
+        """
+        match = _FLAT_VECTOR_INDEX_RE.match(name)
+        if match is None:
+            self.get_scalar_parameter(name).value = float(value)
+            return
+        vec_name, index_str = match.group(1), match.group(2)
+        vp = self.get_vector_parameter(vec_name)
+        index = int(index_str)
+        if not (0 <= index < vp.size):
+            raise KeyError(
+                f"Index {index} out of range for vector parameter "
+                f"'{vec_name}' (size {vp.size})."
+            )
+        vp.values[index] = float(value)
+
+    def read_flat_parameter(self, name: str) -> float:
+        """Read one value addressed the same way as :meth:`apply_flat_parameter`.
+
+        :param name: Scalar parameter name, or ``"{vector_name}[{index}]"``.
+        :type name: str
+        :returns: The current value at that address.
+        :rtype: float
+        :raises KeyError: If the named scalar or vector parameter is not
+            registered, or *index* is out of range for the vector parameter.
+        """
+        match = _FLAT_VECTOR_INDEX_RE.match(name)
+        if match is None:
+            return self.get_scalar_parameter(name).value
+        vec_name, index_str = match.group(1), match.group(2)
+        vp = self.get_vector_parameter(vec_name)
+        index = int(index_str)
+        if not (0 <= index < vp.size):
+            raise KeyError(
+                f"Index {index} out of range for vector parameter "
+                f"'{vec_name}' (size {vp.size})."
+            )
+        return float(vp.values[index])
 
     def register_output_field(self, field: FieldRecord) -> None:
         """Register metadata for one column of the ``predict()`` output.

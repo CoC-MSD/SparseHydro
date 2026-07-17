@@ -266,20 +266,32 @@ class CalibrationProblem:
         ]
 
         # ------------------------------------------------------------------
-        # Parameter registry snapshot (calibrate=True only)
+        # Parameter registry snapshot (calibrate=True only).  Vector
+        # parameters are flattened into one search-vector entry per element,
+        # named "{vector_name}[{index}]"; IModel.apply_flat_parameter()
+        # routes each entry back to the right scalar or vector element.
         # ------------------------------------------------------------------
-        self._param_names = [
-            n for n in model.scalar_parameter_names
-            if model.get_scalar_parameter(n).calibrate
-        ]
-        self._xl = np.array(
-            [model.get_scalar_parameter(n).lower_bound for n in self._param_names],
-            dtype=float,
-        )
-        self._xu = np.array(
-            [model.get_scalar_parameter(n).upper_bound for n in self._param_names],
-            dtype=float,
-        )
+        param_names: list[str] = []
+        xl_list: list[float] = []
+        xu_list: list[float] = []
+        for n in model.scalar_parameter_names:
+            p = model.get_scalar_parameter(n)
+            if not p.calibrate:
+                continue
+            param_names.append(n)
+            xl_list.append(p.lower_bound)
+            xu_list.append(p.upper_bound)
+        for n in model.vector_parameter_names:
+            vp = model.get_vector_parameter(n)
+            if not vp.calibrate:
+                continue
+            for i in range(vp.size):
+                param_names.append(f"{n}[{i}]")
+                xl_list.append(float(vp.lower_bounds[i]))
+                xu_list.append(float(vp.upper_bounds[i]))
+        self._param_names = param_names
+        self._xl = np.array(xl_list, dtype=float)
+        self._xu = np.array(xu_list, dtype=float)
         self._n_ieq_constr: int = len(model.inequality_constraints())
         self._constraint_names: list[str] = list(model.inequality_constraint_names)
         self._constraint_descriptions: list[str] = list(model.inequality_constraint_descriptions)
@@ -307,7 +319,7 @@ class CalibrationProblem:
 
     @property
     def n_params(self) -> int:
-        """Number of calibratable scalar parameters."""
+        """Number of calibratable search dimensions (scalars + flattened vector elements)."""
         return len(self._param_names)
 
     @property
@@ -317,7 +329,12 @@ class CalibrationProblem:
 
     @property
     def param_names(self) -> list[str]:
-        """Ordered list of calibrated parameter names."""
+        """Ordered list of calibrated search-dimension names.
+
+        Scalar parameters appear by their own name; each calibratable
+        :class:`~sparsehydro.parameters.VectorParameter` contributes one
+        entry per element, named ``"{vector_name}[{index}]"``.
+        """
         return list(self._param_names)
 
     @property
@@ -374,7 +391,7 @@ class CalibrationProblem:
         :rtype: numpy.ndarray
         """
         for name, val in zip(self._param_names, x):
-            self._model.get_scalar_parameter(name).value = float(val)
+            self._model.apply_flat_parameter(name, float(val))
 
         pred_df = self._model.predict()
         predicted = self._result_extractor(pred_df)

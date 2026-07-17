@@ -51,7 +51,7 @@ import pandas as pd
 
 from ..enums import ModelState
 from .base import IModel
-from ..parameters import ConstraintRecord, FieldRecord, ScalarParameter
+from ..parameters import ConstraintRecord, FieldRecord, ScalarParameter, VectorParameter
 from ..registry import registry
 
 
@@ -115,6 +115,7 @@ class EnsembleModel(IModel):
         self._output_name: str = output_name
         self._normalize_weights: bool = normalize_weights and (mode == "sum")
         self._param_maps: list[dict[str, str]] = []
+        self._vector_param_maps: list[dict[str, str]] = []
         self._param_owner: dict[str, str] = {}
 
     # ------------------------------------------------------------------
@@ -160,11 +161,32 @@ class EnsembleModel(IModel):
                 mapping[orig_name] = prefixed
             self._param_maps.append(mapping)
 
+        self._vector_param_maps = []
+        for child, alias in zip(self._children, self._aliases):
+            vmapping: dict[str, str] = {}
+            for orig_name in child.vector_parameter_names:
+                prefixed = f"{alias}_{orig_name}"
+                vp = child.get_vector_parameter(orig_name)
+                self.register_vector_parameter(VectorParameter(
+                    name=prefixed,
+                    values=vp.values.copy(),
+                    lower_bounds=vp.lower_bounds.copy(),
+                    upper_bounds=vp.upper_bounds.copy(),
+                    units=vp.units,
+                    description=f"[{alias}] {vp.description}",
+                    calibrate=vp.calibrate,
+                ))
+                vmapping[orig_name] = prefixed
+            self._vector_param_maps.append(vmapping)
+
         self._param_owner = {}
         for i, alias in enumerate(self._aliases, 1):
             self._param_owner[f"w_{i}"] = "weights"
         for alias, mapping in zip(self._aliases, self._param_maps):
             for prefixed_name in mapping.values():
+                self._param_owner[prefixed_name] = alias
+        for alias, vmapping in zip(self._aliases, self._vector_param_maps):
+            for prefixed_name in vmapping.values():
                 self._param_owner[prefixed_name] = alias
 
         for child, alias in zip(self._children, self._aliases):
@@ -390,7 +412,7 @@ class EnsembleModel(IModel):
             output_col = self._output_name
 
         saved = {
-            name: self.get_scalar_parameter(name).value
+            name: self.read_flat_parameter(name)
             for name in result.param_names
         }
 
@@ -398,13 +420,13 @@ class EnsembleModel(IModel):
         try:
             for x in result.pareto_X:
                 for name, value in zip(result.param_names, x):
-                    self.get_scalar_parameter(name).value = float(value)
+                    self.apply_flat_parameter(name, float(value))
                 self.prepare(data, **prepare_kwargs)
                 sim = self.predict()
                 preds.append(np.asarray(sim[output_col], dtype=float))
         finally:
             for name, value in saved.items():
-                self.get_scalar_parameter(name).value = value
+                self.apply_flat_parameter(name, value)
 
         return np.array(preds)
 
@@ -418,6 +440,11 @@ class EnsembleModel(IModel):
             for orig_name, prefixed_name in mapping.items():
                 child.get_scalar_parameter(orig_name).value = (
                     self.get_scalar_parameter(prefixed_name).value
+                )
+        for child, vmapping in zip(self._children, self._vector_param_maps):
+            for orig_name, prefixed_name in vmapping.items():
+                child.get_vector_parameter(orig_name).values[:] = (
+                    self.get_vector_parameter(prefixed_name).values
                 )
 
     # ------------------------------------------------------------------

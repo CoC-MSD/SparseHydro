@@ -235,6 +235,9 @@ class VectorParameter:
     :type units: str
     :param description: Human-readable description (informational only).
     :type description: str
+    :param calibrate: When ``False`` the parameter is held fixed and excluded
+        from the calibration search space.
+    :type calibrate: bool
 
     :raises ValueError: If ``values`` is not 1-D, if the bounds arrays do not
         match the length of ``values`` after broadcasting, or if any
@@ -255,6 +258,10 @@ class VectorParameter:
     upper_bounds: np.ndarray
     units: str = ""
     description: str = ""
+    calibrate: bool = True
+    """When ``False`` the parameter is held fixed and excluded from the
+    calibration search space.  Its values are still applied during
+    ``predict()`` but the optimizer will never modify them."""
 
     def __post_init__(self) -> None:
         self.values = np.asarray(self.values, dtype=float)
@@ -334,6 +341,7 @@ class VectorParameter:
             upper_bounds=self.upper_bounds.copy(),
             units=self.units,
             description=self.description,
+            calibrate=self.calibrate,
         )
 
     def update(
@@ -344,6 +352,7 @@ class VectorParameter:
         upper_bounds: np.ndarray | None = None,
         units: str | None = None,
         description: str | None = None,
+        calibrate: bool | None = None,
     ) -> None:
         """Update one or more mutable attributes in-place.
 
@@ -361,6 +370,8 @@ class VectorParameter:
         :type units: str | None
         :param description: New human-readable description.
         :type description: str | None
+        :param calibrate: New calibration flag.
+        :type calibrate: bool | None
         :raises ValueError: If the resulting configuration is invalid.
         """
         if values is not None:
@@ -373,4 +384,6 @@ class VectorParameter:
             self.units = units
         if description is not None:
             self.description = description
+        if calibrate is not None:
+            self.calibrate = bool(calibrate)
         self.__post_init__()

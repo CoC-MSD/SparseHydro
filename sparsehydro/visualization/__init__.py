@@ -9,6 +9,8 @@ Public API
 | :func:`plot_residuals_scatter`           | Obs-vs-pred scatter, residual bars, autocorrelation  |
 | :func:`plot_cumulative_volume`           | Cumulative sums + volume error                       |
 | :func:`plot_calibration_timeseries`      | 2-row dashboard: exogenous + pred/obs + 1v1 scatter  |
+| :func:`plot_ensemble_members_vs_observed`| Each ensemble member vs. observed, plus combined     |
+| :func:`plot_one_to_one_band`             | 1:1 scatter with a CIWEM-style proportional band     |
 | :class:`VisualizationModel`              | IModel wrapper for time-series plots                 |
 +------------------------------------------+------------------------------------------------------+
 | :func:`plot_pareto_evolution`            | Animated Pareto front with generation slider         |
@@ -41,7 +43,9 @@ try:
         plot_cumulative_volume,
         plot_data_explorer,
         plot_ensemble_components,
+        plot_ensemble_members_vs_observed,
         plot_ensemble_timeseries,
+        plot_one_to_one_band,
         plot_residuals_scatter,
         plot_timeseries,
     )
@@ -133,6 +137,14 @@ except ImportError:
     def plot_ensemble_components(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_ensemble_components. Install with: pip install plotly")
 
+    def plot_ensemble_members_vs_observed(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError(
+            "plotly is required for plot_ensemble_members_vs_observed. Install with: pip install plotly"
+        )
+
+    def plot_one_to_one_band(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_one_to_one_band. Install with: pip install plotly")
+
     from ..models import IModel as _IModel  # noqa: E402
 
     class VisualizationModel(_IModel):  # type: ignore[no-redef]
@@ -162,6 +174,8 @@ __all__ = [
     "plot_data_explorer",
     "plot_ensemble_timeseries",
     "plot_ensemble_components",
+    "plot_ensemble_members_vs_observed",
+    "plot_one_to_one_band",
     "VisualizationModel",
     # Calibration
     "plot_pareto_evolution",

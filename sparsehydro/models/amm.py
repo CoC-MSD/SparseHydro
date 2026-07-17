@@ -483,7 +483,16 @@ class AMMModel(IModel):
             shcf = _shcf_sigmoid(matemp, cold_temp, hot_temp, cold_shcf, hot_shcf)
             amrf = 0.5 ** (dt / amhl)
             # (AMRF - 1) / ln(AMRF): time-step correction factor (Eq. 5).
-            rw_gain = (amrf - 1.0) / math.log(amrf)
+            # Guard the removable singularities so optimisers can probe the
+            # bounds of AMHL without a math-domain crash: for a small AMHL
+            # (relative to dt) ``amrf`` underflows to 0 and the factor tends to
+            # 0; for a large AMHL ``amrf`` tends to 1 and the factor tends to 1.
+            if amrf <= 0.0:
+                rw_gain = 0.0
+            elif amrf >= 1.0:
+                rw_gain = 1.0
+            else:
+                rw_gain = (amrf - 1.0) / math.log(amrf)
 
             rw = np.zeros(n, dtype=float)
             for t in range(1, n):
