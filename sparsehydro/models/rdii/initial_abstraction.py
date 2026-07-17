@@ -9,7 +9,7 @@ behaviour from a single parameter set.
 
 Key equations
 -------------
-Recovery (dry interval Δt, temperature T):
+Recovery (dry interval Δt, temperature T)::
 
     k_rec(T) = k0 + kT * exp(θ * (T - T_ref))   if T >= T_freeze
              = 0                                   if T < T_freeze
@@ -21,7 +21,7 @@ Depletion and rainfall excess (rainfall pulse ΔP mm, uniform within the step):
 The wet step integrates the depletion ODE ``d(IA)/dp = -k_dep * IA`` exactly
 over the step (p = cumulative rain), so results are invariant to sub-step
 refinement — equivalent to uniformly disaggregating the step to an arbitrarily
-fine timestep:
+fine timestep::
 
     IA(p) = IA_avail(t) * exp(-k_dep * p)
 
@@ -29,7 +29,7 @@ fine timestep:
 
     IA_avail(t+Δt) = IA_avail(t) * exp(-k_dep * ΔP)
 
-Optional degree-day snow model (``snow=True``):
+Optional degree-day snow model (``snow=True``)::
 
     T <= snow_T :  SWE += ΔP ;  liquid input = 0          (snowfall)
     T >  snow_T :  melt = min(SWE, snow_ddf * (T - snow_T) * Δt_days)

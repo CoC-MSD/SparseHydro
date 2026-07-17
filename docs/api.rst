@@ -162,21 +162,24 @@ Six interactive Plotly figures for the sequential UH fitting workflow.
 All functions return :class:`plotly.graph_objects.Figure` and are importable
 directly from :mod:`sparsehydro.visualization` or the top-level namespace.
 
-+--------------------------------------------------+----------------------------------------------------+
-| Function                                         | Description                                        |
-+==================================================+====================================================+
-| :func:`plot_rainfall_flow_with_events`           | Two-panel timeseries with event shading bands      |
-+--------------------------------------------------+----------------------------------------------------+
-| :func:`plot_filter_signals`                      | sg_0 / sg_1 / sg_2 with threshold lines           |
-+--------------------------------------------------+----------------------------------------------------+
-| :func:`plot_event_detection`                     | sg_0 + peak markers + event shading               |
-+--------------------------------------------------+----------------------------------------------------+
-| :func:`plot_sequential_fit`                      | Rainfall / obs+pred / residual three-row panel     |
-+--------------------------------------------------+----------------------------------------------------+
-| :func:`plot_parameter_evolution`                 | Fitted params over time, colored by NSE            |
-+--------------------------------------------------+----------------------------------------------------+
-| :func:`plot_effective_area`                      | Bar chart of effective area per event              |
-+--------------------------------------------------+----------------------------------------------------+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - Function
+     - Description
+   * - :func:`plot_rainfall_flow_with_events`
+     - Two-panel timeseries with event shading bands
+   * - :func:`plot_filter_signals`
+     - sg_0 / sg_1 / sg_2 with threshold lines
+   * - :func:`plot_event_detection`
+     - sg_0 + peak markers + event shading
+   * - :func:`plot_sequential_fit`
+     - Rainfall / obs+pred / residual three-row panel
+   * - :func:`plot_parameter_evolution`
+     - Fitted params over time, colored by NSE
+   * - :func:`plot_effective_area`
+     - Bar chart of effective area per event
 
 .. automodule:: sparsehydro.visualization.unithydrograph
    :members:
@@ -261,15 +264,22 @@ implementations that follow the full SparseHydro lifecycle.  All return a
 **Convolution:** ``Q = convolve(rain, kernel * A * dt)[:n]``
 where ``A`` is the effective area ratio (stormflow / rain volume).
 
-+----------------------+-----------------------------------+---------------------------------------+
-| Class                | Parameters                        | Kernel shape                          |
-+======================+===================================+=======================================+
-| :class:`GammaUH`     | A, tt (shape), tp (scale/steps)   | ``(t/tp)^tt · exp(-t/tp)``, normalised|
-+----------------------+-----------------------------------+---------------------------------------+
-| :class:`NashUH`      | A, n (reservoirs), k (storage)    | ``t^(n-1) · exp(-t/k) / (k^n Γ(n))`` |
-+----------------------+-----------------------------------+---------------------------------------+
-| :class:`TriangleUH`  | A, tt (total steps), tp (peak)    | Piecewise linear; ``tp < tt``         |
-+----------------------+-----------------------------------+---------------------------------------+
+.. list-table::
+   :header-rows: 1
+   :widths: 20 40 40
+
+   * - Class
+     - Parameters
+     - Kernel shape
+   * - :class:`GammaUH`
+     - A, tt (shape), tp (scale/steps)
+     - ``(t/tp)^tt · exp(-t/tp)``, normalised
+   * - :class:`NashUH`
+     - A, n (reservoirs), k (storage)
+     - ``t^(n-1) · exp(-t/k) / (k^n Γ(n))``
+   * - :class:`TriangleUH`
+     - A, tt (total steps), tp (peak)
+     - Piecewise linear; ``tp < tt``
 
 .. automodule:: sparsehydro.models.unithydrograph.models
    :members:

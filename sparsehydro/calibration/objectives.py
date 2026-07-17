@@ -7,21 +7,47 @@ observed vs predicted arrays.
 
 Built-in objectives
 -------------------
-+---------------------------+----------+------------------------------------------+
-| Class                     | minimize | Description                              |
-+===========================+==========+==========================================+
-| :class:`MSE`              | True     | Mean squared error                       |
-| :class:`RMSE`             | True     | Root mean squared error                  |
-| :class:`MAE`              | True     | Mean absolute error                      |
-| :class:`PeakWeightedMSE`  | True     | Flow-weighted MSE (peaks penalised)      |
-| :class:`PBIAS`            | True     | Absolute percent bias (volume balance)   |
-| :class:`VolumeRelativeError` | True  | Relative total runoff volume error       |
-| :class:`NashSutcliffe`    | False    | Nash–Sutcliffe efficiency                |
-| :class:`LogNSE`           | False    | NSE on log-transformed flows             |
-| :class:`KGE`              | False    | Kling–Gupta efficiency                   |
-| :class:`IndexOfAgreement` | False    | Willmott's Index of Agreement            |
-| :class:`ConcordanceCorrelationCoefficient` | False | Lin's Concordance Correlation Coefficient |
-+------------------------------------------+----------+------------------------------------------+
+
+.. list-table::
+   :header-rows: 1
+   :widths: 40 15 45
+
+   * - Class
+     - minimize
+     - Description
+   * - :class:`MSE`
+     - True
+     - Mean squared error
+   * - :class:`RMSE`
+     - True
+     - Root mean squared error
+   * - :class:`MAE`
+     - True
+     - Mean absolute error
+   * - :class:`PeakWeightedMSE`
+     - True
+     - Flow-weighted MSE (peaks penalised)
+   * - :class:`PBIAS`
+     - True
+     - Absolute percent bias (volume balance)
+   * - :class:`VolumeRelativeError`
+     - True
+     - Relative total runoff volume error
+   * - :class:`NashSutcliffe`
+     - False
+     - Nash–Sutcliffe efficiency
+   * - :class:`LogNSE`
+     - False
+     - NSE on log-transformed flows
+   * - :class:`KGE`
+     - False
+     - Kling–Gupta efficiency
+   * - :class:`IndexOfAgreement`
+     - False
+     - Willmott's Index of Agreement
+   * - :class:`ConcordanceCorrelationCoefficient`
+     - False
+     - Lin's Concordance Correlation Coefficient
 
 Custom objectives
 -----------------
