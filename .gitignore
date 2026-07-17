@@ -38,3 +38,9 @@ Thumbs.db
 *.tar.gz
 *.zip
 MANIFEST
+
+# Secrets / credentials (never commit)
+ayyeka_auth.py
+flowfinity_auth.py
+csvagent.json
+*.secrets.json

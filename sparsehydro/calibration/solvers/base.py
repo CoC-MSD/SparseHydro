@@ -46,6 +46,7 @@ class ISolver(ABC):
         """Run the solver and return results.
 
         :param problem: Calibration problem wrapping model + data + objectives.
+        :type problem: CalibrationProblem
         :param kwargs: Per-call overrides for solver settings (e.g. ``n_gen=10``).
             Each solver documents which keys are recognised.
         :returns: Calibration result with Pareto front and generation history.

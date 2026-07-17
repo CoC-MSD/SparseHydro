@@ -52,8 +52,11 @@ try:
         :param result: Calibration result with per-generation history.
         :type result: CalibrationResult
         :param x_obj: X-axis objective — zero-based index or objective name.
+        :type x_obj: int or str
         :param y_obj: Y-axis objective — zero-based index or objective name.
+        :type y_obj: int or str
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure with animation frames and slider.
         :rtype: plotly.graph_objects.Figure
         """
@@ -195,9 +198,12 @@ try:
         :param result: Calibration result.
         :type result: CalibrationResult
         :param color_by: Objective name to use for line colour.  Defaults to first objective.
+        :type color_by: str or None
         :param title: Figure title.
+        :type title: str
         :param use_final_pareto_only: Plot only the final Pareto front when
             ``True``; plot all final-generation solutions when ``False``.
+        :type use_final_pareto_only: bool
         :returns: Plotly Figure with ``go.Parcoords`` trace.
         :rtype: plotly.graph_objects.Figure
         """
@@ -261,6 +267,7 @@ try:
         :param result: Calibration result with per-generation history.
         :type result: CalibrationResult
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure with one row per objective.
         :rtype: plotly.graph_objects.Figure
         """
@@ -346,7 +353,9 @@ try:
         :type result: CalibrationResult
         :param use_final_pareto_only: Use only the final Pareto front when
             ``True``; use all history solutions when ``False``.
+        :type use_final_pareto_only: bool
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure with a grid of violin traces.
         :rtype: plotly.graph_objects.Figure
         """
@@ -419,6 +428,7 @@ try:
         :param result: Calibration result.
         :type result: CalibrationResult
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure with ``go.Heatmap`` trace.
         :rtype: plotly.graph_objects.Figure
         """
@@ -483,6 +493,7 @@ try:
         :param result: Calibration result.
         :type result: CalibrationResult
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure with ``go.Splom`` trace.
         :rtype: plotly.graph_objects.Figure
         """
@@ -543,6 +554,7 @@ try:
             or ``"parameters"``.
         :type space: str
         :param title: Figure title.
+        :type title: str
         :returns: Plotly Figure with two ``go.Splom`` traces.
         :rtype: plotly.graph_objects.Figure
         :raises ValueError: If *space* is not ``"objectives"`` or ``"parameters"``.

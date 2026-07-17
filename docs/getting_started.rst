@@ -52,7 +52,7 @@ Interactive charts require ``plotly`` (not bundled, always install separately):
 Quick Example
 -------------
 
-Implement a concrete model by subclassing :class:`~sparsehydro.interfaces.IModel`:
+Implement a concrete model by subclassing :class:`~sparsehydro.models.IModel`:
 
 .. code-block:: python
 
@@ -99,11 +99,11 @@ Implement a concrete model by subclassing :class:`~sparsehydro.interfaces.IModel
    model.finalize()
    print(output)
 
-The **model lifecycle** enforces that :meth:`~sparsehydro.interfaces.IModel.prepare`
-is called before :meth:`~sparsehydro.interfaces.IModel.predict`, and
-:meth:`~sparsehydro.interfaces.IModel.predict` before
-:meth:`~sparsehydro.interfaces.IModel.finalize`.  Skipping steps raises a
-:class:`~sparsehydro.interfaces.LifecycleError`.
+The **model lifecycle** expects that :meth:`~sparsehydro.models.IModel.prepare`
+is called before :meth:`~sparsehydro.models.IModel.predict`, and
+:meth:`~sparsehydro.models.IModel.predict` before
+:meth:`~sparsehydro.models.IModel.finalize`.  Concrete models advance
+:attr:`~sparsehydro.models.IModel.state` as each step completes.
 
 ----
 
@@ -111,14 +111,14 @@ Differentiable Models with PyTorch
 -----------------------------------
 
 For gradient-based parameter estimation, inherit from
-:class:`~sparsehydro.torch_model.ITorchModel`:
+:class:`~sparsehydro.models.torch_model.ITorchModel`:
 
 .. code-block:: python
 
    import torch
    import torch.nn as nn
    from sparsehydro import ModelState, ScalarParameter
-   from sparsehydro.torch_model import ITorchModel
+   from sparsehydro.models.torch_model import ITorchModel
 
    class DiffReservoir(ITorchModel):
 
@@ -176,6 +176,43 @@ always the same regardless of which solver you choose:
    :class:`~sparsehydro.calibration.result.CalibrationResult`.
 4. Inspect the Pareto front, per-generation history, and export to a DataFrame.
 
+The sequence below shows how these objects interact at run time.  Note that the
+solver only ever talks to the
+:class:`~sparsehydro.calibration.problem.CalibrationProblem`, which drives the
+model and objectives on every candidate evaluation:
+
+.. mermaid::
+   :caption: Typical calibration workflow
+
+   sequenceDiagram
+       autonumber
+       actor User
+       participant Model as IModel
+       participant Problem as CalibrationProblem
+       participant Solver as ISolver
+       participant Obj as IObjective
+       participant Result as CalibrationResult
+       participant Viz as Visualization
+
+       User->>Model: initialize()
+       User->>Model: validate()
+       User->>Problem: CalibrationProblem(model, data, objectives, column_map)
+       Problem->>Model: prepare(data)
+       Note over Problem: discovers calibratable<br/>ScalarParameters and bounds
+
+       User->>Solver: solve(problem)
+       loop each candidate / generation
+           Solver->>Problem: evaluate(x)
+           Problem->>Model: set parameters and predict()
+           Model-->>Problem: predicted series
+           Problem->>Obj: evaluate(observed, predicted)
+           Obj-->>Problem: scores
+           Problem-->>Solver: objective vector F
+       end
+       Solver-->>Result: pareto_X, pareto_F, history
+       Result-->>User: best_by(), to_pareto_dataframe()
+       User->>Viz: plot_pareto_evolution(result)
+
 Defining a Calibration Problem
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -189,10 +226,8 @@ It can be passed unchanged to *any* solver.
 
    import numpy as np
    import pandas as pd
-   from sparsehydro import (
-       IModel, ModelState, ScalarParameter,
-       CalibrationProblem, MSE, NashSutcliffe,
-   )
+   from sparsehydro import IModel, ModelState, ScalarParameter
+   from sparsehydro.calibration import CalibrationProblem, MSE, NashSutcliffe
 
    # --- Define a simple two-parameter model ---
    class LinearModel(IModel):
@@ -367,7 +402,7 @@ objectives.
 
 .. code-block:: python
 
-   from sparsehydro import NSGAIISolver
+   from sparsehydro.calibration import NSGAIISolver
 
    solver = NSGAIISolver(
        pop_size = 50,    # individuals per generation
@@ -389,7 +424,7 @@ have one objective and want a fast, gradient-free or gradient-based search.
 
 .. code-block:: python
 
-   from sparsehydro import ScipySolver
+   from sparsehydro.calibration import ScipySolver
 
    # Differential Evolution — global, gradient-free
    solver = ScipySolver(
@@ -419,7 +454,7 @@ accessible through a single solver class.
 .. code-block:: python
 
    import platypus
-   from sparsehydro import PlatypusSolver
+   from sparsehydro.calibration import PlatypusSolver
 
    # NSGA-II via Platypus
    solver = PlatypusSolver(
@@ -453,7 +488,7 @@ archive instead of a standard Pareto archive.
 
 .. code-block:: python
 
-   from sparsehydro import ParticleSwarmSolver
+   from sparsehydro.calibration import ParticleSwarmSolver
 
    # SMPSO — default
    solver = ParticleSwarmSolver(
@@ -531,7 +566,7 @@ Time-Series Diagnostics
 
    import pandas as pd
    import numpy as np
-   from sparsehydro import plot_timeseries
+   from sparsehydro.visualization import plot_timeseries
 
    dt   = pd.date_range("2020-01-01", periods=120, freq="h")
    rain = np.clip(np.random.default_rng(0).exponential(1.5, 120), 0, None)
@@ -546,7 +581,7 @@ Time-Series Diagnostics
 
 .. code-block:: python
 
-   from sparsehydro import plot_residuals_scatter
+   from sparsehydro.visualization import plot_residuals_scatter
 
    fig = plot_residuals_scatter(
        dt, obs, pred,
@@ -565,7 +600,7 @@ The three panels are:
 
 .. code-block:: python
 
-   from sparsehydro import plot_cumulative_volume
+   from sparsehydro.visualization import plot_cumulative_volume
 
    fig = plot_cumulative_volume(dt, obs, pred, title="Volume Balance")
    fig.show()
@@ -622,7 +657,7 @@ generation slider:
 
 .. code-block:: python
 
-   from sparsehydro import plot_pareto_evolution
+   from sparsehydro.visualization import plot_pareto_evolution
 
    fig = plot_pareto_evolution(
        result,
@@ -637,7 +672,7 @@ is one solution; drag axis endpoints to filter:
 
 .. code-block:: python
 
-   from sparsehydro import plot_parallel_coordinates
+   from sparsehydro.visualization import plot_parallel_coordinates
 
    fig = plot_parallel_coordinates(
        result,
@@ -651,7 +686,7 @@ per generation for each objective:
 
 .. code-block:: python
 
-   from sparsehydro import plot_objective_convergence
+   from sparsehydro.visualization import plot_objective_convergence
 
    fig = plot_objective_convergence(result, title="Convergence")
    fig.show()
@@ -661,7 +696,7 @@ calibrated parameter across the Pareto front:
 
 .. code-block:: python
 
-   from sparsehydro import plot_parameter_distributions
+   from sparsehydro.visualization import plot_parameter_distributions
 
    fig = plot_parameter_distributions(result, use_final_pareto_only=True)
    fig.show()
@@ -672,7 +707,7 @@ parameters:
 
 .. code-block:: python
 
-   from sparsehydro import plot_sensitivity_heatmap
+   from sparsehydro.visualization import plot_sensitivity_heatmap
 
    fig = plot_sensitivity_heatmap(result, title="Parameter Sensitivity")
    fig.show()
@@ -682,7 +717,7 @@ pairs.  Useful when there are three or more objectives:
 
 .. code-block:: python
 
-   from sparsehydro import plot_pareto_scatter_matrix
+   from sparsehydro.visualization import plot_pareto_scatter_matrix
 
    fig = plot_pareto_scatter_matrix(result, title="Objective Trade-offs")
    fig.show()
@@ -699,7 +734,7 @@ sanity-checking T (time-to-peak) and K (recession ratio) before calibration:
 .. code-block:: python
 
    from sparsehydro.rdii import RTKTriangle
-   from sparsehydro import plot_rtk_shape
+   from sparsehydro.visualization import plot_rtk_shape
 
    tri1 = RTKTriangle(R=0.05, T=1.0, K=2.0)
    tri1.initialize(); tri1.validate()
@@ -716,7 +751,7 @@ contributions alongside rainfall.  The input DataFrame must contain
 
 .. code-block:: python
 
-   from sparsehydro import plot_rdii_components
+   from sparsehydro.visualization import plot_rdii_components
 
    # result_df is the DataFrame returned by RDIIModel.predict()
    fig = plot_rdii_components(result_df, title="RDII Components")
@@ -731,7 +766,7 @@ no server required:
 
 .. code-block:: python
 
-   from sparsehydro import plot_calibration_dashboard
+   from sparsehydro.visualization import plot_calibration_dashboard
 
    fig = plot_calibration_dashboard(
        result,
@@ -764,7 +799,7 @@ be composed into any pipeline:
 
 .. code-block:: python
 
-   from sparsehydro import VisualizationModel
+   from sparsehydro.visualization import VisualizationModel
 
    viz = VisualizationModel(title="RDII Calibration Run")
    viz.initialize()
@@ -833,7 +868,7 @@ Quick RDII calibration
    print(best)
 
    # Visualise
-   from sparsehydro import plot_timeseries, plot_pareto_evolution
+   from sparsehydro.visualization import plot_timeseries, plot_pareto_evolution
    plot_pareto_evolution(result).show()
 
 See the :ref:`API Reference <api-reference>` for complete documentation of

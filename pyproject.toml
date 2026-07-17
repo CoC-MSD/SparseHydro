@@ -4,21 +4,26 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sparsehydro"
-version = "0.1.0"
+version = "0.1.0a1"
 description = "Interface specifications for parsimonious hydrological models"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
 authors = [
     { name = "Caleb Buahin", email = "cbuahin@hazenandsawyer.com" },
-    { name = "John Barton", email = "john.barton@cincinnati-oh.gov" },
-    { name = "Filipe Romero", email = "felipe.romero@cincinnati-oh.gov" },
     { name = "Trent Schade", email = "trent.schade@cincinnati-oh.gov" },
+    { name = "John Barton", email = "john.barton@cincinnati-oh.gov" },
 ]
 maintainers = [
     { name = "Caleb Buahin", email = "cbuahin@hazenandsawyer.com" },
     { name = "Trent Schade", email = "trent.schade@cincinnati-oh.gov" },
+    { name = "Filipe Romero", email = "felipe.romero@cincinnati-oh.gov" },
+    { name = "Trent Schade", email = "trent.schade@cincinnati-oh.gov" },
+    { name = "William Abbey", email = "william.abbey@cincinnati-oh.gov" },
+    { name = "Sebastian Otarola-Bustos", email = "SOtarolaBustos@hazenandsawyer.com" },
+    { name = "Mickey Tadese", email = "MTadesse@hazenandsawyer.com" },
 ]
+
 keywords = ["hydrology", "parsimonious", "model", "calibration", "pytorch"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -28,23 +33,24 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Scientific/Engineering :: Hydrology",
 ]
 dependencies = [
     "numpy>=1.24",
     "pandas>=2.0",
+    "scipy>=1.10",
+    "pyarrow>=14.0",
+    "requests>=2.31",
+    "requests-toolbelt>=1.0",
+    "torch>=2.0",
+    "pymoo>=0.6",
+    "plotly>=5.0",
+    "platypus-opt>=1.0",
 ]
 
 [project.optional-dependencies]
-torch = ["torch>=2.0"]
-rdii = [
-    "pymoo>=0.6",
-    "plotly>=5.0",
-    "scipy>=1.10",
-]
-platypus = [
-    "platypus-opt>=1.0",
-]
 docs = [
     "sphinx>=7.0",
     "pydata-sphinx-theme>=0.15",
@@ -56,16 +62,10 @@ dev = [
     "pytest>=7.0",
     "pytest-cov",
     "sparsehydro[docs]",
-    "sparsehydro[rdii]",
-]
-all = [
-    "sparsehydro[torch]",
-    "sparsehydro[rdii]",
-    "sparsehydro[platypus]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/MSDGC-SWM/sparsehydro"
+Homepage = "https://coc-msd.github.io/SparseHydro/#documentation"
 Repository = "https://github.com/MSDGC-SWM/sparsehydro"
 Documentation = "https://MSDGC-SWM.github.io/sparsehydro"
 Issues = "https://github.com/MSDGC-SWM/sparsehydro/issues"

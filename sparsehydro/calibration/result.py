@@ -22,9 +22,13 @@ GenerationRecord = namedtuple(
 """Per-generation snapshot of the optimizer population.
 
 :param generation: Generation index (1-based).
+:type generation: int
 :param X: Parameter matrix, shape ``(pop_size, n_params)``.
+:type X: numpy.ndarray
 :param F: Objective matrix in minimisation form, shape ``(pop_size, n_obj)``.
+:type F: numpy.ndarray
 :param n_pareto: Number of Pareto-dominant solutions in this generation.
+:type n_pareto: int
 """
 
 
@@ -60,14 +64,20 @@ class CalibrationResult:
 
     :param history: One :class:`GenerationRecord` per generation.  May be
         empty for single-shot solvers.
+    :type history: list[GenerationRecord]
     :param pareto_X: Parameter matrix for the final Pareto front,
         shape ``(m, n_params)``.
+    :type pareto_X: numpy.ndarray
     :param pareto_F: Objective matrix in minimisation form,
         shape ``(m, n_obj)``.
+    :type pareto_F: numpy.ndarray
     :param param_names: Ordered list of calibrated parameter names.
+    :type param_names: list[str]
     :param objective_names: Names of each objective (matching objective order).
+    :type objective_names: list[str]
     :param minimize_flags: ``True`` for minimised objectives; ``False`` for
         maximised objectives.
+    :type minimize_flags: list[bool]
     """
 
     def __init__(

@@ -19,6 +19,7 @@ import pandas as pd
 from sparsehydro.calibration import (
     IObjective,
     KGE,
+    LogNSE,
     MAE,
     MSE,
     RMSE,
@@ -30,7 +31,7 @@ from sparsehydro.calibration import (
 )
 from sparsehydro.calibration.result import _identify_pareto
 from sparsehydro.enums import ModelState
-from sparsehydro.interfaces import IModel
+from sparsehydro.models import IModel
 from sparsehydro.parameters import ScalarParameter
 
 # ---------------------------------------------------------------------------
@@ -219,12 +220,12 @@ class TestObjectives(unittest.TestCase):
         self.assertGreater(PeakWeightedMSE().evaluate(obs, pred), 0.0)
 
     def test_peak_weighted_mse_power_default_matches_linear(self):
-        from sparsehydro.rdii.objectives import peak_weighted_mse
+        from sparsehydro.calibration.objectives import _peak_weighted_mse
         obs = np.array([1.0, 3.0, 5.0, 2.0])
         pred = np.array([1.0, 2.0, 4.0, 2.5])
         self.assertAlmostEqual(
             PeakWeightedMSE().evaluate(obs, pred),
-            peak_weighted_mse(obs, pred, power=1.0),
+            _peak_weighted_mse(obs, pred, power=1.0),
             places=12,
         )
 
@@ -256,6 +257,99 @@ class TestObjectives(unittest.TestCase):
     def test_peak_weighted_mse_negative_power_raises(self):
         with self.assertRaises(ValueError):
             PeakWeightedMSE(power=-1.0)
+
+    # --- compute(): masking + NaN handling ---
+
+    def test_compute_no_mask_matches_evaluate(self):
+        obj = MSE()
+        self.assertAlmostEqual(
+            obj.compute(self.obs, self.pred),
+            obj.evaluate(self.obs, self.pred),
+            places=12,
+        )
+
+    def test_compute_explicit_mask_selects_subset(self):
+        obs = np.array([1.0, 2.0, 3.0, 4.0])
+        pred = np.array([1.0, 9.0, 3.0, 9.0])
+        mask = np.array([True, False, True, False])
+        # Only positions 0 and 2 are kept, where pred == obs → MSE 0.
+        self.assertAlmostEqual(MSE().compute(obs, pred, mask=mask), 0.0, places=12)
+
+    def test_compute_always_drops_nan(self):
+        obs = np.array([1.0, np.nan, 3.0, 4.0])
+        pred = np.array([1.0, 100.0, 3.0, 4.0])
+        # NaN position dropped automatically → remaining are perfect → MSE 0.
+        self.assertAlmostEqual(MSE().compute(obs, pred), 0.0, places=12)
+
+    def test_compute_drops_nan_in_predicted(self):
+        obs = np.array([1.0, 2.0, 3.0])
+        pred = np.array([1.0, np.nan, 3.0])
+        self.assertAlmostEqual(MSE().compute(obs, pred), 0.0, places=12)
+
+    def test_compute_uses_objective_self_mask(self):
+        obs = np.array([1.0, 2.0, 3.0, 4.0])
+        pred = np.array([1.0, 9.0, 3.0, 9.0])
+        mask = np.array([True, False, True, False])
+        obj = MSE(mask=mask)
+        self.assertAlmostEqual(obj.compute(obs, pred), 0.0, places=12)
+
+    def test_compute_explicit_mask_overrides_self_mask(self):
+        obs = np.array([1.0, 2.0, 3.0, 4.0])
+        pred = np.array([1.0, 9.0, 3.0, 9.0])
+        self_mask = np.array([False, True, False, True])   # would select bad points
+        override = np.array([True, False, True, False])     # selects perfect points
+        obj = MSE(mask=self_mask)
+        self.assertAlmostEqual(obj.compute(obs, pred, mask=override), 0.0, places=12)
+
+    def test_compute_shape_mismatch_raises(self):
+        with self.assertRaises(ValueError):
+            MSE().compute(np.array([1.0, 2.0, 3.0]), np.array([1.0, 2.0]))
+
+    def test_compute_mask_shape_mismatch_raises(self):
+        obs = np.array([1.0, 2.0, 3.0])
+        pred = np.array([1.0, 2.0, 3.0])
+        with self.assertRaises(ValueError):
+            MSE().compute(obs, pred, mask=np.array([True, False]))
+
+    def test_compute_empty_selection_raises(self):
+        obs = np.array([1.0, 2.0, 3.0])
+        pred = np.array([1.0, 2.0, 3.0])
+        with self.assertRaises(ValueError):
+            MSE().compute(obs, pred, mask=np.array([False, False, False]))
+
+    def test_compute_all_nan_raises(self):
+        obs = np.array([np.nan, np.nan])
+        pred = np.array([1.0, 2.0])
+        with self.assertRaises(ValueError):
+            MSE().compute(obs, pred)
+
+    def test_compute_str_mask_raises_typeerror(self):
+        obs = np.array([1.0, 2.0, 3.0])
+        pred = np.array([1.0, 2.0, 3.0])
+        with self.assertRaises(TypeError):
+            MSE().compute(obs, pred, mask="is_storm")
+
+    def test_compute_callable_mask_raises_typeerror(self):
+        obs = np.array([1.0, 2.0, 3.0])
+        pred = np.array([1.0, 2.0, 3.0])
+        with self.assertRaises(TypeError):
+            MSE().compute(obs, pred, mask=lambda _: np.ones(3, dtype=bool))
+
+    def test_peak_weighted_mse_accepts_mask(self):
+        obs = np.array([1.0, 2.0, 3.0, 4.0])
+        pred = np.array([1.0, 9.0, 3.0, 9.0])
+        mask = np.array([True, False, True, False])
+        obj = PeakWeightedMSE(power=2.0, mask=mask)
+        self.assertIs(obj.mask, mask)
+        self.assertAlmostEqual(obj.compute(obs, pred), 0.0, places=12)
+
+    def test_log_nse_accepts_mask(self):
+        obs = np.array([1.0, 2.0, 3.0, 4.0])
+        mask = np.array([True, False, True, False])
+        obj = LogNSE(epsilon=0.01, mask=mask)
+        self.assertIs(obj.mask, mask)
+        # Perfect prediction on the masked subset → LogNSE == 1.
+        self.assertAlmostEqual(obj.compute(obs, obs), 1.0, places=10)
 
 
 # ===========================================================================
@@ -474,6 +568,176 @@ class TestCalibrationProblem(unittest.TestCase):
                     "predicted": lambda df: df["y"].to_numpy(),
                 },
             )
+
+
+# ===========================================================================
+# Test CalibrationProblem masking
+# ===========================================================================
+
+class TestCalibrationProblemMasking(unittest.TestCase):
+
+    def _build(self, *, objectives, mask=None, column_map_extra=None, observed=None):
+        """Build a prepared _LinearModel CalibrationProblem.
+
+        ``predict()`` yields ``y = slope*x + intercept``; with the default
+        params (slope=1, intercept=0) the prediction equals ``x`` exactly.
+        """
+        x = np.linspace(1.0, 10.0, 10)
+        model = _LinearModel()
+        model.initialize()
+        model.validate()
+        model.prepare(x)
+
+        if observed is None:
+            observed = x.copy()
+        _obs = observed
+        cmap = {
+            "observed":  lambda _: _obs,
+            "predicted": lambda df: df["y"].to_numpy(),
+        }
+        if column_map_extra:
+            cmap.update(column_map_extra)
+        problem = CalibrationProblem(
+            model=model,
+            objectives=objectives,
+            column_map=cmap,
+            mask=mask,
+        )
+        return problem, x
+
+    def test_array_mask_changes_objective_value(self):
+        # Corrupt the observed series only at masked-out positions; with the
+        # mask applied the score must be unaffected (≈0) vs. large unmasked.
+        x = np.linspace(1.0, 10.0, 10)
+        observed = x.copy()
+        observed[5:] += 50.0  # large mismatch in the second half
+        keep = np.array([True] * 5 + [False] * 5)
+
+        unmasked, _ = self._build(objectives=[MSE()], observed=observed)
+        masked, _ = self._build(objectives=[MSE()], mask=keep, observed=observed)
+
+        x0 = np.array([1.0, 0.0])  # slope=1, intercept=0 → pred == x
+        F_unmasked = unmasked.evaluate(x0)
+        F_masked = masked.evaluate(x0)
+        self.assertGreater(F_unmasked[0], 1.0)
+        self.assertAlmostEqual(F_masked[0], 0.0, places=10)
+
+    def test_column_map_mask_name(self):
+        # Provide the mask as a prepared-data column via column_map["mask"].
+        x = np.linspace(1.0, 10.0, 10)
+        observed = x.copy()
+        observed[5:] += 50.0
+        is_storm = np.array([True] * 5 + [False] * 5)
+
+        model = _LinearModel()
+        model.initialize()
+        model.validate()
+        model.prepare(x)
+
+        prepared = pd.DataFrame({"is_storm": is_storm})
+        problem = CalibrationProblem(
+            model=model,
+            objectives=[MSE()],
+            column_map={
+                "observed":  lambda _: observed,
+                "predicted": lambda df: df["y"].to_numpy(),
+                "mask":      lambda _: prepared["is_storm"].to_numpy(),
+            },
+        )
+        F = problem.evaluate(np.array([1.0, 0.0]))
+        self.assertAlmostEqual(F[0], 0.0, places=10)
+
+    def test_callable_mask(self):
+        x = np.linspace(1.0, 10.0, 10)
+        observed = x.copy()
+        observed[5:] += 50.0
+        problem, _ = self._build(
+            objectives=[MSE()],
+            mask=lambda _: np.array([True] * 5 + [False] * 5),
+            observed=observed,
+        )
+        F = problem.evaluate(np.array([1.0, 0.0]))
+        self.assertAlmostEqual(F[0], 0.0, places=10)
+
+    def test_explicit_mask_arg_beats_column_map(self):
+        x = np.linspace(1.0, 10.0, 10)
+        observed = x.copy()
+        observed[5:] += 50.0
+        model = _LinearModel()
+        model.initialize()
+        model.validate()
+        model.prepare(x)
+        # column_map["mask"] would keep the bad second half; explicit mask= wins.
+        problem = CalibrationProblem(
+            model=model,
+            objectives=[MSE()],
+            column_map={
+                "observed":  lambda _: observed,
+                "predicted": lambda df: df["y"].to_numpy(),
+                "mask":      lambda _: np.array([False] * 5 + [True] * 5),
+            },
+            mask=np.array([True] * 5 + [False] * 5),
+        )
+        F = problem.evaluate(np.array([1.0, 0.0]))
+        self.assertAlmostEqual(F[0], 0.0, places=10)
+
+    def test_per_objective_override_beats_problem_default(self):
+        # Problem default keeps the first half (good); the second objective
+        # overrides to keep the second half (bad) → its value must be large.
+        x = np.linspace(1.0, 10.0, 10)
+        observed = x.copy()
+        observed[5:] += 50.0
+        good_half = np.array([True] * 5 + [False] * 5)
+        bad_half = np.array([False] * 5 + [True] * 5)
+
+        model = _LinearModel()
+        model.initialize()
+        model.validate()
+        model.prepare(x)
+        problem = CalibrationProblem(
+            model=model,
+            objectives=[MSE(), MSE(mask=bad_half)],
+            column_map={
+                "observed":  lambda _: observed,
+                "predicted": lambda df: df["y"].to_numpy(),
+            },
+            mask=good_half,
+        )
+        F = problem.evaluate(np.array([1.0, 0.0]))
+        self.assertAlmostEqual(F[0], 0.0, places=10)   # problem default
+        self.assertGreater(F[1], 1.0)                  # per-objective override
+
+    def test_mask_length_mismatch_raises(self):
+        x = np.linspace(1.0, 10.0, 10)
+        model = _LinearModel()
+        model.initialize()
+        model.validate()
+        model.prepare(x)
+        with self.assertRaises(ValueError):
+            CalibrationProblem(
+                model=model,
+                objectives=[MSE()],
+                column_map={
+                    "observed":  lambda _: x.copy(),
+                    "predicted": lambda df: df["y"].to_numpy(),
+                },
+                mask=np.array([True, False, True]),  # wrong length
+            )
+
+    def test_make_copy_preserves_masks(self):
+        x = np.linspace(1.0, 10.0, 10)
+        observed = x.copy()
+        observed[5:] += 50.0
+        problem, _ = self._build(
+            objectives=[MSE()],
+            mask=np.array([True] * 5 + [False] * 5),
+            observed=observed,
+        )
+        cp = problem.make_copy()
+        F = cp.evaluate(np.array([1.0, 0.0]))
+        self.assertAlmostEqual(F[0], 0.0, places=10)
+        # Independent arrays.
+        self.assertIsNot(cp._mask, problem._mask)
 
 
 # ===========================================================================

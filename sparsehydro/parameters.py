@@ -111,11 +111,17 @@ class ScalarParameter:
         invalid (``lower_bound > upper_bound``).
 
         :param value: New parameter value.
+        :type value: float | None
         :param lower_bound: New lower bound.
+        :type lower_bound: float | None
         :param upper_bound: New upper bound.
+        :type upper_bound: float | None
         :param units: New units string (e.g. ``"in"``, ``"m/s"``).
+        :type units: str | None
         :param description: New human-readable description.
+        :type description: str | None
         :param calibrate: New calibration flag.
+        :type calibrate: bool | None
         :raises ValueError: If ``lower_bound > upper_bound`` after the update.
         """
         if value is not None:
@@ -138,12 +144,62 @@ class ScalarParameter:
 
 
 @dataclass
+class FieldRecord:
+    """Metadata for a single column in a model's ``predict()`` output DataFrame.
+
+    Register one :class:`FieldRecord` per output column during
+    :meth:`~sparsehydro.models.IModel.initialize` so that calibration
+    tooling, notebooks, and downstream consumers can discover what each column
+    contains without inspecting the DataFrame itself.
+
+    :param name: Column name exactly as it appears in the ``predict()`` output
+        (e.g. ``"rdii_cfs"``, ``"total_cfs"``).
+    :type name: str
+    :param units: Physical units string (e.g. ``"CFS"``, ``"mm"``, ``"in"``).
+        Use ``""`` for dimensionless or non-physical columns such as
+        ``"datetime"``.
+    :type units: str
+    :param description: Human-readable explanation of what the field represents.
+    :type description: str
+    :param calibratable: ``True`` when this column can serve as the
+        ``predicted`` column in a
+        :class:`~sparsehydro.calibration.CalibrationProblem` — i.e. it is a
+        flow-rate or quantity directly comparable to an observed signal.
+        Diagnostic columns (depth, excess, datetime) should be ``False``.
+    :type calibratable: bool
+
+    Example::
+
+        from sparsehydro.parameters import FieldRecord
+
+        class MyModel(IModel):
+            def initialize(self) -> None:
+                self.register_output_field(FieldRecord(
+                    name="datetime",
+                    description="Simulation time step",
+                ))
+                self.register_output_field(FieldRecord(
+                    name="q_cfs",
+                    units="CFS",
+                    description="Predicted flow rate",
+                    calibratable=True,
+                ))
+                self._state = ModelState.INITIALIZED
+    """
+
+    name: str
+    units: str = ""
+    description: str = ""
+    calibratable: bool = False
+
+
+@dataclass
 class ConstraintRecord:
     """Metadata for a single inequality constraint registered by a model.
 
     Complements :class:`ScalarParameter` for the constraint side of the
     optimisation problem.  The residual values themselves are returned by
-    :meth:`~sparsehydro.interfaces.IModel.inequality_constraints`; this class
+    :meth:`~sparsehydro.models.IModel.inequality_constraints`; this class
     carries only the *identity* of each constraint so that solvers and
     notebooks can display meaningful labels.
 
@@ -179,6 +235,9 @@ class VectorParameter:
     :type units: str
     :param description: Human-readable description (informational only).
     :type description: str
+    :param calibrate: When ``False`` the parameter is held fixed and excluded
+        from the calibration search space.
+    :type calibrate: bool
 
     :raises ValueError: If ``values`` is not 1-D, if the bounds arrays do not
         match the length of ``values`` after broadcasting, or if any
@@ -199,6 +258,10 @@ class VectorParameter:
     upper_bounds: np.ndarray
     units: str = ""
     description: str = ""
+    calibrate: bool = True
+    """When ``False`` the parameter is held fixed and excluded from the
+    calibration search space.  Its values are still applied during
+    ``predict()`` but the optimizer will never modify them."""
 
     def __post_init__(self) -> None:
         self.values = np.asarray(self.values, dtype=float)
@@ -278,6 +341,7 @@ class VectorParameter:
             upper_bounds=self.upper_bounds.copy(),
             units=self.units,
             description=self.description,
+            calibrate=self.calibrate,
         )
 
     def update(
@@ -288,6 +352,7 @@ class VectorParameter:
         upper_bounds: np.ndarray | None = None,
         units: str | None = None,
         description: str | None = None,
+        calibrate: bool | None = None,
     ) -> None:
         """Update one or more mutable attributes in-place.
 
@@ -296,10 +361,17 @@ class VectorParameter:
         Raises :class:`ValueError` if the resulting bounds or shape are invalid.
 
         :param values: New values array (must match current length).
+        :type values: numpy.ndarray | None
         :param lower_bounds: New lower bounds (scalar broadcast supported).
+        :type lower_bounds: numpy.ndarray | None
         :param upper_bounds: New upper bounds (scalar broadcast supported).
+        :type upper_bounds: numpy.ndarray | None
         :param units: New units string.
+        :type units: str | None
         :param description: New human-readable description.
+        :type description: str | None
+        :param calibrate: New calibration flag.
+        :type calibrate: bool | None
         :raises ValueError: If the resulting configuration is invalid.
         """
         if values is not None:
@@ -312,4 +384,6 @@ class VectorParameter:
             self.units = units
         if description is not None:
             self.description = description
+        if calibrate is not None:
+            self.calibrate = bool(calibrate)
         self.__post_init__()

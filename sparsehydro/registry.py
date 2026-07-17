@@ -1,6 +1,6 @@
 """Model registration service for sparsehydro.
 
-:class:`ModelRegistry` tracks compatible :class:`~sparsehydro.interfaces.IModel`
+:class:`ModelRegistry` tracks compatible :class:`~sparsehydro.models.IModel`
 implementations and lets calibration frameworks discover and instantiate models
 by name without importing them directly.
 
@@ -20,16 +20,13 @@ from __future__ import annotations
 import inspect
 from typing import Any, Iterator
 
-from .interfaces import IModel
-
-
 class ModelRegistry:
     """Central registry for tracking compatible parsimonious model classes.
 
     A model class is considered *compatible* if it:
 
     1. Is a **concrete** (non-abstract) subclass of
-       :class:`~sparsehydro.interfaces.IModel`.
+       :class:`~sparsehydro.models.IModel`.
     2. Defines a non-empty ``model_name`` class variable.
 
     The registry can be used directly as a class decorator::
@@ -45,25 +42,25 @@ class ModelRegistry:
     """
 
     def __init__(self) -> None:
-        self._models: dict[str, type[IModel]] = {}
+        self._models: dict[str, type] = {}
 
     # ------------------------------------------------------------------
     # Registration
     # ------------------------------------------------------------------
 
-    def register(self, model_cls: type[IModel]) -> type[IModel]:
+    def register(self, model_cls: type) -> type:
         """Register a compatible model class.
 
         May be used as a class decorator.
 
         :param model_cls: The model class to register.  Must be a concrete
-            subclass of :class:`~sparsehydro.interfaces.IModel` that defines
+            subclass of :class:`~sparsehydro.models.IModel` that defines
             a non-empty ``model_name`` class variable.
         :type model_cls: type[IModel]
         :returns: The model class unchanged (enables decorator use).
         :rtype: type[IModel]
         :raises TypeError: If ``model_cls`` is not a concrete
-            :class:`~sparsehydro.interfaces.IModel` subclass or does not
+            :class:`~sparsehydro.models.IModel` subclass or does not
             define a valid ``model_name``.
         :raises ValueError: If a model with the same name is already
             registered.
@@ -156,7 +153,8 @@ class ModelRegistry:
         :param model_cls: The class to check.
         :raises TypeError: If incompatible.
         """
-        if not (isinstance(model_cls, type) and issubclass(model_cls, IModel)):
+        from .models.base import IModel as _IModel  # lazy to avoid circular import
+        if not (isinstance(model_cls, type) and issubclass(model_cls, _IModel)):
             raise TypeError(
                 f"{model_cls!r} is not a subclass of IModel."
             )

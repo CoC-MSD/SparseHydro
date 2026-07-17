@@ -9,6 +9,8 @@ Public API
 | :func:`plot_residuals_scatter`           | Obs-vs-pred scatter, residual bars, autocorrelation  |
 | :func:`plot_cumulative_volume`           | Cumulative sums + volume error                       |
 | :func:`plot_calibration_timeseries`      | 2-row dashboard: exogenous + pred/obs + 1v1 scatter  |
+| :func:`plot_ensemble_members_vs_observed`| Each ensemble member vs. observed, plus combined     |
+| :func:`plot_one_to_one_band`             | 1:1 scatter with a CIWEM-style proportional band     |
 | :class:`VisualizationModel`              | IModel wrapper for time-series plots                 |
 +------------------------------------------+------------------------------------------------------+
 | :func:`plot_pareto_evolution`            | Animated Pareto front with generation slider         |
@@ -40,7 +42,10 @@ try:
         plot_calibration_timeseries,
         plot_cumulative_volume,
         plot_data_explorer,
+        plot_ensemble_components,
+        plot_ensemble_members_vs_observed,
         plot_ensemble_timeseries,
+        plot_one_to_one_band,
         plot_residuals_scatter,
         plot_timeseries,
     )
@@ -55,6 +60,14 @@ try:
     )
     from .rdii import plot_rdii_components, plot_rtk_shape
     from .dashboard import plot_calibration_dashboard
+    from .unithydrograph import (
+        plot_rainfall_flow_with_events,
+        plot_filter_signals,
+        plot_event_detection,
+        plot_sequential_fit,
+        plot_parameter_evolution,
+        plot_effective_area,
+    )
 
 except ImportError:
 
@@ -97,13 +110,42 @@ except ImportError:
     def plot_calibration_dashboard(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_calibration_dashboard. Install with: pip install plotly")
 
+    def plot_rainfall_flow_with_events(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_rainfall_flow_with_events. Install with: pip install plotly")
+
+    def plot_filter_signals(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_filter_signals. Install with: pip install plotly")
+
+    def plot_event_detection(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_event_detection. Install with: pip install plotly")
+
+    def plot_sequential_fit(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_sequential_fit. Install with: pip install plotly")
+
+    def plot_parameter_evolution(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_parameter_evolution. Install with: pip install plotly")
+
+    def plot_effective_area(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_effective_area. Install with: pip install plotly")
+
     def plot_data_explorer(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_data_explorer. Install with: pip install plotly")
 
     def plot_ensemble_timeseries(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_ensemble_timeseries. Install with: pip install plotly")
 
-    from ..interfaces import IModel as _IModel  # noqa: E402
+    def plot_ensemble_components(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_ensemble_components. Install with: pip install plotly")
+
+    def plot_ensemble_members_vs_observed(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError(
+            "plotly is required for plot_ensemble_members_vs_observed. Install with: pip install plotly"
+        )
+
+    def plot_one_to_one_band(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_one_to_one_band. Install with: pip install plotly")
+
+    from ..models import IModel as _IModel  # noqa: E402
 
     class VisualizationModel(_IModel):  # type: ignore[no-redef]
         model_name = "visualization"
@@ -131,6 +173,9 @@ __all__ = [
     "plot_cumulative_volume",
     "plot_data_explorer",
     "plot_ensemble_timeseries",
+    "plot_ensemble_components",
+    "plot_ensemble_members_vs_observed",
+    "plot_one_to_one_band",
     "VisualizationModel",
     # Calibration
     "plot_pareto_evolution",
@@ -145,4 +190,11 @@ __all__ = [
     "plot_rdii_components",
     # Dashboard
     "plot_calibration_dashboard",
+    # Unit hydrograph workflow
+    "plot_rainfall_flow_with_events",
+    "plot_filter_signals",
+    "plot_event_detection",
+    "plot_sequential_fit",
+    "plot_parameter_evolution",
+    "plot_effective_area",
 ]

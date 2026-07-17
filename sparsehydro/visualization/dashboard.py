@@ -60,17 +60,24 @@ try:
         :param timeseries_df: Optional model-output DataFrame.
         :type timeseries_df: pandas.DataFrame or None
         :param datetime_col: Datetime column name in *timeseries_df*.
+        :type datetime_col: str
         :param predicted_col: Predicted-flow column name in *timeseries_df*.
+        :type predicted_col: str
         :param observed_col: Observed-flow column name, or ``None`` to omit.
+        :type observed_col: str or None
         :param rainfall_col: Rainfall column name, or ``None`` to omit zeros.
+        :type rainfall_col: str or None
         :param flow_label: Y-axis label for flow panels.
+        :type flow_label: str
         :param title: Dashboard heading.
+        :type title: str
         :param output_path: File path for the HTML output.  Pass ``None`` to
             skip writing.
         :type output_path: str or None
         :param use_cdn: Include Plotly via CDN ``<script>`` tag when ``True``;
             inline the full Plotly bundle when ``False`` (larger file, fully
             offline).
+        :type use_cdn: bool
         :returns: The objective-convergence figure (for interactive notebook
             use; the full dashboard is only available in the HTML file).
         :rtype: plotly.graph_objects.Figure

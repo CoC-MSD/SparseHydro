@@ -109,6 +109,7 @@ try:
             """Run the Platypus algorithm and return a :class:`~sparsehydro.calibration.result.CalibrationResult`.
 
             :param problem: Calibration problem wrapping model + data + objectives.
+            :type problem: CalibrationProblem
             :param kwargs: Per-call overrides: ``n_evaluations``, ``seed``,
                 ``record_frequency``, ``callback``.  Additional keys are merged into
                 ``algorithm_kwargs`` and forwarded to the algorithm constructor.
@@ -213,14 +214,21 @@ try:
         provided, otherwise uses ``platypus.SMPSO``.
 
         :param swarm_size: Number of particles in the swarm.
+        :type swarm_size: int
         :param leader_size: Size of the leader archive.
+        :type leader_size: int
         :param n_evaluations: Total function-evaluation budget.
+        :type n_evaluations: int
         :param epsilons: Per-objective ε values for OMOPSO; ``None`` uses SMPSO.
             Length must equal the number of objectives.
+        :type epsilons: list or None
         :param seed: Random seed (``None`` for non-deterministic).
+        :type seed: int or None
         :param record_frequency: History snapshot interval (algorithm iterations).
+        :type record_frequency: int
         :param algorithm_kwargs: Additional keyword arguments forwarded to the
             Platypus algorithm constructor.
+        :type algorithm_kwargs: Any
         """
 
         def __init__(
@@ -247,9 +255,12 @@ try:
             """Run the PSO solver and return a :class:`~sparsehydro.calibration.result.CalibrationResult`.
 
             :param problem: Calibration problem wrapping model + data + objectives.
+            :type problem: CalibrationProblem
             :param kwargs: Per-call overrides: ``swarm_size``, ``leader_size``,
                 ``n_evaluations``, ``seed``, ``record_frequency``, ``epsilons``,
                 ``callback``.
+            :returns: Result with per-iteration history and final Pareto front.
+            :rtype: CalibrationResult
             """
             swarm_size       = kwargs.pop("swarm_size",       self.swarm_size)
             leader_size      = kwargs.pop("leader_size",      self.leader_size)

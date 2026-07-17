@@ -70,6 +70,10 @@ autodoc_type_aliases = {"DataFrame": "pandas.DataFrame", "Series": "pandas.Serie
 
 autoclass_content = "both"
 
+# Optional third-party dependencies not installed in the ``docs`` build.
+# Mock them so autodoc/autosummary can import modules that reference them.
+autodoc_mock_imports = ["plotly"]
+
 numfig = True
 numfig_format = {"figure": "Figure %s", "table": "Table %s", "code-block": "Listing %s"}
 
@@ -104,7 +108,7 @@ intersphinx_mapping = {
     "torch": ("https://pytorch.org/docs/stable", None),
 }
 
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "rdii_design.md", "unithydrograph_strategy.md", "combined_model.md"]
+exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "rdii_design.md", "unithydrograph_strategy.md", "combined_model.md", "ensemble_visualization_plan.md", "QAQC_dt.md"]
 
 suppress_warnings = [
     "ref.myst",

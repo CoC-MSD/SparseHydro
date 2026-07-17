@@ -50,6 +50,14 @@ class ProgressCallback:
         self._call_count = 0
 
     def __call__(self, info: dict) -> None:
+        """Print a progress line if the invocation count hits *frequency*.
+
+        :param info: Progress dictionary supplied by the solver (see the module
+            docstring for the expected keys).
+        :type info: dict
+        :returns: ``None``.
+        :rtype: None
+        """
         self._call_count += 1
         if self._call_count % self.frequency != 0:
             return
