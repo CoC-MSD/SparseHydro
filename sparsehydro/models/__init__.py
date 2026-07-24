@@ -3,7 +3,8 @@
 Sub-packages
 ------------
 - :mod:`sparsehydro.models.rdii` — RDII physics models (IAModel, RDIIModel, RTKTriangle)
-- :mod:`sparsehydro.models.unithydrograph` — unit hydrograph adapters and implementations
+- :mod:`sparsehydro.models.unithydrograph` — native unit hydrograph implementations
+- :mod:`sparsehydro.models.abstraction` — rainfall-abstraction (tank) models
 
 Interfaces
 ----------
@@ -21,6 +22,13 @@ from .base import IModel, IUnitHydroComponent
 from .amm import AMMModel
 from .ensemble import EnsembleModel
 from .seasonality import SeasonalityModel
+from .composite import AbstractionUHModel
+from .abstraction import (
+    TankAbstractionModel,
+    ConstantDrainTank,
+    LinearDrainTank,
+    SqrtDrainTank,
+)
 
 __all__ = [
     "IModel",
@@ -28,6 +36,11 @@ __all__ = [
     "AMMModel",
     "EnsembleModel",
     "SeasonalityModel",
+    "AbstractionUHModel",
+    "TankAbstractionModel",
+    "ConstantDrainTank",
+    "LinearDrainTank",
+    "SqrtDrainTank",
     "ITorchModel",
 ]
 

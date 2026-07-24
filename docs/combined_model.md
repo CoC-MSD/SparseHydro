@@ -193,9 +193,7 @@ assert set(result.columns) == {"datetime", "rdii_cfs", "rdii_mm", "p_excess_mm"}
 model.finalize()
 
 # Mixed UH types (Nash + RTK)
-from sparsehydro.unithydrograph import register_all_uh_models
-register_all_uh_models()
-NashUH = create_uh_model("Nash")
+from sparsehydro.models.unithydrograph import NashUH
 model2 = CombinedHydroModel(
     ia_model=IAModel(),
     uh_components=[RTKTriangle(R=0.05, T=1.0, K=1.5), NashUH()],

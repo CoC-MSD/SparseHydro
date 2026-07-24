@@ -410,4 +410,332 @@ class TriangleUH(IUnitHydroComponent):
         return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
 
 
-__all__ = ["GammaUH", "NashUH", "TriangleUH"]
+# ---------------------------------------------------------------------------
+# Rectangle UH
+# ---------------------------------------------------------------------------
+
+class RectangleUH(IUnitHydroComponent):
+    """Rectangular (instant-pulse) unit hydrograph.
+
+    Shape: constant response over ``0 < t <= tr``, zero elsewhere.  Represents a
+    uniform runoff pulse with no rising/falling limb.
+
+    :param A: Effective area ratio.  Bounds [0, 1e4].
+    :type A: float
+    :param tr: Pulse duration in time steps.  Bounds [1, 1000].
+    :type tr: float
+    """
+
+    model_name: ClassVar[str] = "rectangle-uh"
+    _amplitude_param_name: ClassVar[str | None] = "A"
+
+    def __init__(self, A: float = 100.0, tr: float = 10.0) -> None:
+        super().__init__()
+        self._A_init = float(A)
+        self._tr_init = float(tr)
+        self._data: pd.DataFrame | None = None
+
+    def initialize(self) -> None:
+        """Register the A, tr scalar parameters and advance to INITIALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
+        self._scalars = {}
+        self._vectors = {}
+        self._constraints = []
+        self.register_scalar_parameter(ScalarParameter("A", value=self._A_init, lower_bound=0.0, upper_bound=1e4, description="Effective area ratio"))
+        self.register_scalar_parameter(ScalarParameter("tr", value=self._tr_init, lower_bound=1.0, upper_bound=1000.0, units="steps", description="Pulse duration in time steps"))
+        self._state = ModelState.INITIALIZED
+
+    def validate(self) -> bool:
+        """Validate parameter bounds and advance to VALIDATED.
+
+        :returns: ``True`` if all parameters are within bounds.
+        :rtype: bool
+        """
+        ok = self.parameters_valid()
+        if ok:
+            self._state = ModelState.VALIDATED
+        return ok
+
+    def prepare(self, data: pd.DataFrame) -> None:
+        """Cache forcing data and coerce the ``datetime`` column.
+
+        :param data: DataFrame with ``datetime`` and ``rain`` columns.
+        :type data: pandas.DataFrame
+        :returns: Nothing.
+        :rtype: None
+        """
+        self._data = data.copy()
+        self._data["datetime"] = pd.to_datetime(self._data["datetime"])
+        self._state = ModelState.PREPARED
+
+    def predict(self) -> pd.DataFrame:
+        """Convolve rainfall with the rectangular UH kernel and return predicted flow.
+
+        :returns: DataFrame with columns ``datetime`` and ``Q_pred``.
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
+        if self._data is None:
+            raise RuntimeError("Call prepare() before predict().")
+        A = self.get_scalar_parameter("A").value
+        dt = _infer_dt_hours(self._data)
+        rain = self._data["rain"].values.astype(float)
+        kernel = self.get_kernel(dt_hours=dt)
+        Q = np.convolve(rain, kernel * A * dt, mode="full")[: len(rain)]
+        self._state = ModelState.PREDICTED
+        return pd.DataFrame({"datetime": self._data["datetime"].values, "Q_pred": Q})
+
+    def finalize(self) -> None:
+        """Release cached forcing data and advance to FINALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
+        self._data = None
+        self._state = ModelState.FINALIZED
+
+    def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
+        """Return the normalized rectangular UH ordinate array.
+
+        :param dt_hours: Time-step size [hr].
+        :type dt_hours: float
+        :param n_steps: Number of output steps; defaults to the natural support.
+        :type n_steps: int | None
+        :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
+        :rtype: numpy.ndarray
+        """
+        tr_val = max(self.get_scalar_parameter("tr").value, 1e-6)
+        n = int(np.ceil(tr_val)) + 1
+        t = np.arange(n, dtype=float)
+        raw = np.zeros(n)
+        raw[(t > 0) & (t <= tr_val)] = 1.0
+        return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+
+
+# ---------------------------------------------------------------------------
+# Decay UH
+# ---------------------------------------------------------------------------
+
+class DecayUH(IUnitHydroComponent):
+    """Discrete exponential-decay unit hydrograph.
+
+    Shape: ``f(t) ∝ alpha^t`` — a monotonic recession peaking at ``t = 0`` with
+    no rising limb.
+
+    :param A: Effective area ratio.  Bounds [0, 1e4].
+    :type A: float
+    :param alpha: Per-step decay ratio in ``[0, 1)``.  Bounds [0, 0.999999].
+    :type alpha: float
+    """
+
+    model_name: ClassVar[str] = "decay-uh"
+    _amplitude_param_name: ClassVar[str | None] = "A"
+
+    def __init__(self, A: float = 100.0, alpha: float = 0.5) -> None:
+        super().__init__()
+        self._A_init = float(A)
+        self._alpha_init = float(alpha)
+        self._data: pd.DataFrame | None = None
+
+    def initialize(self) -> None:
+        """Register the A, alpha scalar parameters and advance to INITIALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
+        self._scalars = {}
+        self._vectors = {}
+        self._constraints = []
+        self.register_scalar_parameter(ScalarParameter("A", value=self._A_init, lower_bound=0.0, upper_bound=1e4, description="Effective area ratio"))
+        self.register_scalar_parameter(ScalarParameter("alpha", value=self._alpha_init, lower_bound=0.0, upper_bound=1.0 - 1e-6, description="Per-step decay ratio"))
+        self._state = ModelState.INITIALIZED
+
+    def validate(self) -> bool:
+        """Validate parameter bounds and advance to VALIDATED.
+
+        :returns: ``True`` if all parameters are within bounds.
+        :rtype: bool
+        """
+        ok = self.parameters_valid()
+        if ok:
+            self._state = ModelState.VALIDATED
+        return ok
+
+    def prepare(self, data: pd.DataFrame) -> None:
+        """Cache forcing data and coerce the ``datetime`` column.
+
+        :param data: DataFrame with ``datetime`` and ``rain`` columns.
+        :type data: pandas.DataFrame
+        :returns: Nothing.
+        :rtype: None
+        """
+        self._data = data.copy()
+        self._data["datetime"] = pd.to_datetime(self._data["datetime"])
+        self._state = ModelState.PREPARED
+
+    def predict(self) -> pd.DataFrame:
+        """Convolve rainfall with the decay UH kernel and return predicted flow.
+
+        :returns: DataFrame with columns ``datetime`` and ``Q_pred``.
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
+        if self._data is None:
+            raise RuntimeError("Call prepare() before predict().")
+        A = self.get_scalar_parameter("A").value
+        dt = _infer_dt_hours(self._data)
+        rain = self._data["rain"].values.astype(float)
+        kernel = self.get_kernel(dt_hours=dt)
+        Q = np.convolve(rain, kernel * A * dt, mode="full")[: len(rain)]
+        self._state = ModelState.PREDICTED
+        return pd.DataFrame({"datetime": self._data["datetime"].values, "Q_pred": Q})
+
+    def finalize(self) -> None:
+        """Release cached forcing data and advance to FINALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
+        self._data = None
+        self._state = ModelState.FINALIZED
+
+    def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
+        """Return the normalized decay UH ordinate array.
+
+        :param dt_hours: Time-step size [hr].
+        :type dt_hours: float
+        :param n_steps: Number of output steps; defaults to the natural support.
+        :type n_steps: int | None
+        :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
+        :rtype: numpy.ndarray
+        """
+        alpha = min(max(self.get_scalar_parameter("alpha").value, 0.0), 1.0 - 1e-9)
+        if alpha <= 0.0:
+            raw = np.array([1.0])
+            return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+        max_steps = min(_MAX_STEPS, max(int(np.log(1e-3) / np.log(alpha)) + 1, 20))
+        t = np.arange(max_steps, dtype=float)
+        raw = np.maximum(alpha**t, 0.0)
+        return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+
+
+# ---------------------------------------------------------------------------
+# Gamma UH with time delay
+# ---------------------------------------------------------------------------
+
+class GammaDelayUH(IUnitHydroComponent):
+    """Gamma-function unit hydrograph with a pure time delay.
+
+    Shape: ``f(t) ∝ ((t-td)/tp)^tt * exp(-(t-td)/tp)`` for ``t > td``, else 0.
+    Captures a routing lag before the gamma response begins.
+
+    :param A: Effective area ratio.  Bounds [0, 1e4].
+    :type A: float
+    :param tt: Shape parameter (dimensionless).  Bounds [0.01, 50].
+    :type tt: float
+    :param tp: Scale / time-to-peak in time steps.  Bounds [0.01, 500].
+    :type tp: float
+    :param td: Delay before response onset, in time steps.  Bounds [0, 200].
+    :type td: float
+    """
+
+    model_name: ClassVar[str] = "gamma-delay-uh"
+    _amplitude_param_name: ClassVar[str | None] = "A"
+
+    def __init__(self, A: float = 1.0, tt: float = 2.0, tp: float = 5.0, td: float = 5.0) -> None:
+        super().__init__()
+        self._A_init = float(A)
+        self._tt_init = float(tt)
+        self._tp_init = float(tp)
+        self._td_init = float(td)
+        self._data: pd.DataFrame | None = None
+
+    def initialize(self) -> None:
+        """Register the A, tt, tp, td scalar parameters and advance to INITIALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
+        self._scalars = {}
+        self._vectors = {}
+        self._constraints = []
+        self.register_scalar_parameter(ScalarParameter("A", value=self._A_init, lower_bound=0.0, upper_bound=1e4, description="Effective area ratio"))
+        self.register_scalar_parameter(ScalarParameter("tt", value=self._tt_init, lower_bound=0.01, upper_bound=50.0, description="Gamma shape parameter"))
+        self.register_scalar_parameter(ScalarParameter("tp", value=self._tp_init, lower_bound=0.01, upper_bound=500.0, units="steps", description="Time to peak in time steps"))
+        self.register_scalar_parameter(ScalarParameter("td", value=self._td_init, lower_bound=0.0, upper_bound=200.0, units="steps", description="Response delay in time steps"))
+        self._state = ModelState.INITIALIZED
+
+    def validate(self) -> bool:
+        """Validate parameter bounds and advance to VALIDATED.
+
+        :returns: ``True`` if all parameters are within bounds.
+        :rtype: bool
+        """
+        ok = self.parameters_valid()
+        if ok:
+            self._state = ModelState.VALIDATED
+        return ok
+
+    def prepare(self, data: pd.DataFrame) -> None:
+        """Cache forcing data and coerce the ``datetime`` column.
+
+        :param data: DataFrame with ``datetime`` and ``rain`` columns.
+        :type data: pandas.DataFrame
+        :returns: Nothing.
+        :rtype: None
+        """
+        self._data = data.copy()
+        self._data["datetime"] = pd.to_datetime(self._data["datetime"])
+        self._state = ModelState.PREPARED
+
+    def predict(self) -> pd.DataFrame:
+        """Convolve rainfall with the delayed gamma UH kernel and return predicted flow.
+
+        :returns: DataFrame with columns ``datetime`` and ``Q_pred``.
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
+        if self._data is None:
+            raise RuntimeError("Call prepare() before predict().")
+        A = self.get_scalar_parameter("A").value
+        dt = _infer_dt_hours(self._data)
+        rain = self._data["rain"].values.astype(float)
+        kernel = self.get_kernel(dt_hours=dt)
+        Q = np.convolve(rain, kernel * A * dt, mode="full")[: len(rain)]
+        self._state = ModelState.PREDICTED
+        return pd.DataFrame({"datetime": self._data["datetime"].values, "Q_pred": Q})
+
+    def finalize(self) -> None:
+        """Release cached forcing data and advance to FINALIZED.
+
+        :returns: Nothing.
+        :rtype: None
+        """
+        self._data = None
+        self._state = ModelState.FINALIZED
+
+    def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
+        """Return the normalized delayed-gamma UH ordinate array.
+
+        :param dt_hours: Time-step size [hr].
+        :type dt_hours: float
+        :param n_steps: Number of output steps; defaults to the natural support.
+        :type n_steps: int | None
+        :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
+        :rtype: numpy.ndarray
+        """
+        tt = self.get_scalar_parameter("tt").value
+        tp = max(self.get_scalar_parameter("tp").value, 1e-6)
+        td = max(self.get_scalar_parameter("td").value, 0.0)
+        max_steps = min(_MAX_STEPS, max(int(5 * tp + td + 1), 20))
+        t = np.arange(1, max_steps + 1, dtype=float)
+        ts = t - td
+        raw = np.where(ts > 0.0, (ts / tp) ** tt * np.exp(-ts / tp), 0.0)
+        raw = np.maximum(raw, 0.0)
+        return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+
+
+__all__ = ["GammaUH", "NashUH", "TriangleUH", "RectangleUH", "DecayUH", "GammaDelayUH"]

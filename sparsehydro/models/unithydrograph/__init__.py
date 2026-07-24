@@ -1,18 +1,15 @@
 """sparsehydro.models.unithydrograph — unit hydrograph models.
 
-This subpackage provides:
+This subpackage provides native :class:`~sparsehydro.models.IUnitHydroComponent`
+implementations plus sequential event-by-event fitting:
 
-- :class:`~sparsehydro.models.unithydrograph.UnitHydrographAdapter` — the
-  adapter base that bridges the existing ``UnitHydrograph`` class to the
-  ``IModel`` lifecycle.
-- :func:`~sparsehydro.models.unithydrograph.create_uh_model` — factory that
-  creates a concrete, registry-compatible subclass for any model registered
-  in ``UnitHydrograph._registry``.
-- :func:`~sparsehydro.models.unithydrograph.register_all_uh_models` — bulk
-  registration helper.
 - :class:`~sparsehydro.models.unithydrograph.GammaUH` — Gamma-function UH
 - :class:`~sparsehydro.models.unithydrograph.NashUH` — Nash cascade UH
 - :class:`~sparsehydro.models.unithydrograph.TriangleUH` — Triangular UH
+- :class:`~sparsehydro.models.unithydrograph.RectangleUH` — Rectangular pulse UH
+- :class:`~sparsehydro.models.unithydrograph.DecayUH` — Exponential-decay UH
+- :class:`~sparsehydro.models.unithydrograph.GammaDelayUH` — Delayed Gamma UH
+- :class:`~sparsehydro.models.unithydrograph.PeakTailUH` — Blended peak+tail UH
 - :class:`~sparsehydro.models.unithydrograph.SequentialFitter` — sequential event fitting
 - :class:`~sparsehydro.models.unithydrograph.SequentialFitSummary` — fitting results
 
@@ -27,21 +24,26 @@ Quick start::
     print(summary.metrics_summary())
 """
 
-from .adapter import (
-    UnitHydrographAdapter,
-    create_uh_model,
-    register_all_uh_models,
+from .models import (
+    GammaUH,
+    NashUH,
+    TriangleUH,
+    RectangleUH,
+    DecayUH,
+    GammaDelayUH,
 )
-from .models import GammaUH, NashUH, TriangleUH
-from .sequential import SequentialFitter, SequentialFitSummary
+from .peak_tail import PeakTailUH
+from .sequential import SequentialFitter, SequentialFitSummary, GlobalSequentialFitter
 
 __all__ = [
-    "UnitHydrographAdapter",
-    "create_uh_model",
-    "register_all_uh_models",
     "GammaUH",
     "NashUH",
     "TriangleUH",
+    "RectangleUH",
+    "DecayUH",
+    "GammaDelayUH",
+    "PeakTailUH",
     "SequentialFitter",
     "SequentialFitSummary",
+    "GlobalSequentialFitter",
 ]

@@ -20,11 +20,41 @@ from scipy.optimize import Bounds, minimize as scipy_minimize
 from scipy.optimize import differential_evolution
 from scipy.signal import savgol_filter
 
-from ...calibration.objectives import RMSE, KGE, NashSutcliffe, IObjective
+from ...calibration.objectives import RMSE, KGE, NashSutcliffe, WeightedRMSE, IObjective
 from ...calibration.problem import CalibrationProblem
 from ...calibration.result import CalibrationResult
 from ..base import IModel
 from ...events import EventRecord
+
+
+def _zonal_weight_vector(event, datetimes, peak_weight: float, tail_weight: float) -> np.ndarray:
+    """Build a per-timestep zonal weight vector for one event window.
+
+    Points inside the peak zone ``[rise_start_datetime, tail_start_datetime]``
+    receive *peak_weight*; all others receive *tail_weight*.  Events without the
+    zone attributes (e.g. a plain :class:`~sparsehydro.events.EventRecord`) get a
+    uniform *tail_weight* vector.
+
+    :param event: Event exposing optional ``rise_start_datetime`` /
+        ``tail_start_datetime`` attributes.
+    :type event: object
+    :param datetimes: Timestamps of the event window.
+    :type datetimes: array-like
+    :param peak_weight: Weight applied inside the peak zone.
+    :type peak_weight: float
+    :param tail_weight: Weight applied outside the peak zone.
+    :type tail_weight: float
+    :returns: Per-timestep weight vector aligned with *datetimes*.
+    :rtype: numpy.ndarray
+    """
+    dts = pd.to_datetime(pd.Series(np.asarray(datetimes)).reset_index(drop=True))
+    w = np.full(len(dts), float(tail_weight), dtype=float)
+    rs = getattr(event, "rise_start_datetime", None)
+    ts = getattr(event, "tail_start_datetime", None)
+    if rs is not None and ts is not None and not pd.isna(rs) and not pd.isna(ts):
+        peak_mask = (dts >= pd.Timestamp(rs)) & (dts <= pd.Timestamp(ts))
+        w[peak_mask.to_numpy()] = float(peak_weight)
+    return w
 
 
 @dataclass
@@ -182,6 +212,10 @@ class SequentialFitter:
         calibration_objective_index: int = 0,
         method: str = "Nelder-Mead",
         smooth_obs: bool = True,
+        savgol_options: dict | None = None,
+        zonal_weights: bool = False,
+        peak_weight: float = 3.0,
+        tail_weight: float = 1.0,
         verbose: bool = True,
     ) -> SequentialFitSummary:
         """Run the sequential fitting loop.
@@ -192,7 +226,8 @@ class SequentialFitter:
             ``[RMSE(), NashSutcliffe(), KGE()]``.
         :type objectives: list[IObjective] | None
         :param calibration_objective_index: Index of *objectives* to minimise
-            (default 0 = RMSE).
+            (default 0 = RMSE).  Ignored when *zonal_weights* is ``True`` (the
+            weighted objective is always minimised).
         :type calibration_objective_index: int
         :param method: ``scipy.optimize.minimize`` method, or
             ``"differential_evolution"`` for a global search.
@@ -200,6 +235,19 @@ class SequentialFitter:
         :param smooth_obs: Apply a light Savitzky-Golay smooth to observed flow
             within each event.
         :type smooth_obs: bool
+        :param savgol_options: Options for the observed smoothing —
+            ``{"window_length": int, "polyorder": int}`` (defaults 5 / 2).
+        :type savgol_options: dict | None
+        :param zonal_weights: When ``True`` and events expose
+            ``rise_start_datetime`` / ``tail_start_datetime`` (i.e.
+            :class:`~sparsehydro.events.SubEventRecord`), minimise a
+            :class:`~sparsehydro.calibration.WeightedRMSE` that up-weights the
+            peak zone.
+        :type zonal_weights: bool
+        :param peak_weight: Per-timestep weight applied inside the peak zone.
+        :type peak_weight: float
+        :param tail_weight: Per-timestep weight applied outside the peak zone.
+        :type tail_weight: float
         :param verbose: Print per-event progress.
         :type verbose: bool
         :returns: Summary of the sequential fitting run.
@@ -207,6 +255,9 @@ class SequentialFitter:
         """
         if objectives is None:
             objectives = [RMSE(), NashSutcliffe(), KGE()]
+        sg_opts = savgol_options or {}
+        sg_wlen = int(sg_opts.get("window_length", 5))
+        sg_poly = int(sg_opts.get("polyorder", 2))
 
         data = self._filter_data(time_range)
         events = self._filter_events(time_range)
@@ -253,11 +304,20 @@ class SequentialFitter:
 
             event_data = data[fit_mask].copy().reset_index(drop=True)
             obs = Q_residual[idx_s:idx_e].copy()
-            if smooth_obs and len(obs) >= 5:
-                wlen = 5
-                obs = savgol_filter(obs, window_length=wlen, polyorder=2, mode="interp")
+            if smooth_obs and len(obs) >= max(sg_wlen, 3):
+                wlen = sg_wlen if sg_wlen % 2 == 1 else sg_wlen + 1
+                wlen = min(wlen, len(obs) if len(obs) % 2 == 1 else len(obs) - 1)
+                if wlen >= sg_poly + 2:
+                    obs = savgol_filter(obs, window_length=wlen, polyorder=sg_poly, mode="interp")
             obs = np.maximum(obs, 0.0)
             event_data["stormflow"] = obs
+
+            event_objectives = objectives
+            obj_idx = calibration_objective_index
+            if zonal_weights:
+                w_vec = _zonal_weight_vector(event, event_data["datetime"], peak_weight, tail_weight)
+                event_objectives = [WeightedRMSE(weights=w_vec), *objectives]
+                obj_idx = 0
 
             model_i = self._factory()
             model_i.initialize()
@@ -272,7 +332,7 @@ class SequentialFitter:
                 problem = CalibrationProblem(
                     model=model_i,
                     data=event_data,
-                    objectives=objectives,
+                    objectives=event_objectives,
                     column_map={"observed": "stormflow", "predicted": self._output_column},
                 )
             except Exception as exc:
@@ -283,7 +343,7 @@ class SequentialFitter:
             xl, xu = problem.bounds
             x0 = np.clip(last_x, xl, xu) if (last_x is not None and last_param_names == problem.param_names) else (xl + xu) / 2.0
 
-            best_x, success = self._optimise(problem, x0, xl, xu, method, calibration_objective_index)
+            best_x, success = self._optimise(problem, x0, xl, xu, method, obj_idx)
 
             all_F = problem.evaluate(best_x).reshape(1, -1)
             cal_result = CalibrationResult(
@@ -368,7 +428,7 @@ class SequentialFitter:
             return float(problem.evaluate(x)[obj_idx])
 
         if method == "differential_evolution":
-            res = differential_evolution(scalar_fn, bounds=bounds_list, seed=42, polish=True)
+            res = differential_evolution(scalar_fn, bounds=bounds_list, rng=42, polish=True)
             return res.x, bool(res.success)
 
         try:
@@ -409,4 +469,218 @@ class SequentialFitter:
         return evts
 
 
-__all__ = ["SequentialFitter", "SequentialFitSummary"]
+def _optimise_problem(problem, x0, xl, xu, method, obj_idx):
+    """Minimise a single objective of *problem* from start point *x0*.
+
+    :param problem: Calibration problem exposing ``evaluate``.
+    :type problem: CalibrationProblem
+    :param x0: Initial parameter vector.
+    :type x0: numpy.ndarray
+    :param xl: Lower parameter bounds.
+    :type xl: numpy.ndarray
+    :param xu: Upper parameter bounds.
+    :type xu: numpy.ndarray
+    :param method: ``scipy.optimize.minimize`` method or ``"differential_evolution"``.
+    :type method: str
+    :param obj_idx: Index of the objective to minimise.
+    :type obj_idx: int
+    :returns: Tuple ``(best_x, success)``.
+    :rtype: tuple[numpy.ndarray, bool]
+    """
+    bounds_list = list(zip(xl.tolist(), xu.tolist()))
+
+    def scalar_fn(x):
+        return float(problem.evaluate(x)[obj_idx])
+
+    if method == "differential_evolution":
+        res = differential_evolution(scalar_fn, bounds=bounds_list, rng=42, polish=True)
+        return res.x, bool(res.success)
+    try:
+        res = scipy_minimize(
+            scalar_fn, x0=x0, bounds=Bounds(lb=xl, ub=xu), method=method,
+            options={"maxiter": 2000, "xatol": 1e-6, "fatol": 1e-8},
+        )
+        return res.x, bool(res.success)
+    except Exception:
+        return x0.copy(), False
+
+
+class GlobalSequentialFitter:
+    """Fit one model per global event over its padded window (joint sub-event fit).
+
+    Unlike :class:`SequentialFitter` (residual, one fit per event), this fits a
+    single unit hydrograph per :class:`~sparsehydro.events.GlobalEvent` window,
+    minimising a :class:`~sparsehydro.calibration.WeightedRMSE` over the union of
+    the member sub-events' peak zones, and warm-starts each global event from the
+    previous one.  Padding outside the member events is given zero weight.
+
+    :param model_factory: Zero-argument callable returning a fresh model.
+    :type model_factory: Callable[[], IModel]
+    :param rain_stormflow: Full time series with ``datetime``, ``rain``,
+        ``stormflow`` (and optionally ``temperature_c``).
+    :type rain_stormflow: pandas.DataFrame
+    :param global_events: Global events to fit.
+    :type global_events: list
+    :param sub_events: Sub-events providing member peak zones (matched by ``global_id``).
+    :type sub_events: list
+    :param output_column: Column produced by ``model.predict()``.  Default ``"Q_pred"``.
+    :type output_column: str
+    """
+
+    def __init__(
+        self,
+        model_factory: Callable[[], IModel],
+        rain_stormflow: pd.DataFrame,
+        global_events: list,
+        sub_events: list,
+        output_column: str = "Q_pred",
+    ) -> None:
+        self._factory = model_factory
+        self._data = rain_stormflow.copy()
+        self._data["datetime"] = pd.to_datetime(self._data["datetime"])
+        self._data["stormflow"] = np.maximum(self._data["stormflow"].values, 0.0)
+        self._global_events = sorted(global_events, key=lambda g: g.window_start_datetime)
+        self._subs_by_global: dict = {}
+        for s in sub_events:
+            self._subs_by_global.setdefault(s.global_id, []).append(s)
+        self._output_column = output_column
+
+    def fit(
+        self,
+        objectives: list[IObjective] | None = None,
+        method: str = "Nelder-Mead",
+        smooth_obs: bool = True,
+        savgol_options: dict | None = None,
+        peak_weight: float = 3.0,
+        tail_weight: float = 1.0,
+        verbose: bool = True,
+    ) -> SequentialFitSummary:
+        """Fit each global event's window and accumulate predictions.
+
+        :param objectives: Reporting objectives; defaults to
+            ``[RMSE(), NashSutcliffe(), KGE()]``.  A weighted RMSE is always
+            prepended and minimised.
+        :type objectives: list[IObjective] | None
+        :param method: ``scipy.optimize.minimize`` method or ``"differential_evolution"``.
+        :type method: str
+        :param smooth_obs: Light Savitzky-Golay smooth of observed flow per window.
+        :type smooth_obs: bool
+        :param savgol_options: ``{"window_length": int, "polyorder": int}``.
+        :type savgol_options: dict | None
+        :param peak_weight: Weight inside member peak zones.
+        :type peak_weight: float
+        :param tail_weight: Weight inside member events but outside peak zones.
+        :type tail_weight: float
+        :param verbose: Print per-global-event progress.
+        :type verbose: bool
+        :returns: Summary whose ``events`` are the fitted global events.
+        :rtype: SequentialFitSummary
+        """
+        if objectives is None:
+            objectives = [RMSE(), NashSutcliffe(), KGE()]
+        sg_opts = savgol_options or {}
+        sg_wlen = int(sg_opts.get("window_length", 5))
+        sg_poly = int(sg_opts.get("polyorder", 2))
+
+        data = self._data
+        datetime_arr = data["datetime"].values
+        Q_global = np.zeros(len(data))
+        cal_results: list[CalibrationResult] = []
+        fitted_events: list = []
+        fitted_areas: list[float] = []
+        last_x: np.ndarray | None = None
+        last_names: list[str] = []
+
+        for gi, ge in enumerate(self._global_events):
+            mask = (data["datetime"] >= ge.window_start_datetime) & (data["datetime"] <= ge.window_end_datetime)
+            idxs = np.where(mask.values)[0]
+            if idxs.size == 0:
+                continue
+            win = data[mask].copy().reset_index(drop=True)
+            obs = win["stormflow"].values.copy()
+            if smooth_obs and len(obs) >= max(sg_wlen, 3):
+                wlen = sg_wlen if sg_wlen % 2 == 1 else sg_wlen + 1
+                wlen = min(wlen, len(obs) if len(obs) % 2 == 1 else len(obs) - 1)
+                if wlen >= sg_poly + 2:
+                    obs = savgol_filter(obs, wlen, sg_poly, mode="interp")
+            win["stormflow"] = np.maximum(obs, 0.0)
+
+            members = self._subs_by_global.get(ge.global_id, [])
+            w = np.zeros(len(win), dtype=float)
+            dts = win["datetime"]
+            for s in members:
+                w[((dts >= s.start_datetime) & (dts <= s.end_datetime)).to_numpy()] = tail_weight
+                w[((dts >= s.rise_start_datetime) & (dts <= s.tail_start_datetime)).to_numpy()] = peak_weight
+            if not np.any(w > 0):
+                w[:] = tail_weight
+
+            model = self._factory()
+            model.initialize()
+            if last_x is not None and last_names:
+                for nm, val in zip(last_names, last_x):
+                    if nm in model.scalar_parameter_names:
+                        p = model.get_scalar_parameter(nm)
+                        p.update(value=float(np.clip(val, p.lower_bound, p.upper_bound)))
+            model.validate()
+
+            try:
+                problem = CalibrationProblem(
+                    model=model, data=win,
+                    objectives=[WeightedRMSE(weights=w), *objectives],
+                    column_map={"observed": "stormflow", "predicted": self._output_column},
+                )
+            except Exception as exc:
+                if verbose:
+                    print(f"  GE{ge.global_id} problem failed: {exc!r} — skipped.")
+                continue
+
+            xl, xu = problem.bounds
+            x0 = np.clip(last_x, xl, xu) if (last_x is not None and last_names == problem.param_names) else (xl + xu) / 2.0
+            best_x, success = _optimise_problem(problem, x0, xl, xu, method, 0)
+
+            all_F = problem.evaluate(best_x).reshape(1, -1)
+            cal = CalibrationResult(
+                history=[], pareto_X=best_x.reshape(1, -1), pareto_F=all_F,
+                param_names=problem.param_names, objective_names=problem.objective_names,
+                minimize_flags=problem.minimize_flags,
+            )
+            for nm, val in zip(problem.param_names, best_x):
+                if nm in model.scalar_parameter_names:
+                    model.get_scalar_parameter(nm).update(value=float(val))
+
+            fitted_ae = 0.0
+            try:
+                model.prepare(win)
+                pred = model.predict()
+                q = pred[self._output_column].values
+                pred_len = min(len(q), idxs.size)
+                Q_global[idxs[:pred_len]] += q[:pred_len]
+                rain_sum = float(win["rain"].values.sum())
+                if rain_sum > 0:
+                    fitted_ae = float(q[:pred_len].sum()) / rain_sum
+            except Exception as exc:
+                if verbose:
+                    print(f"  GE{ge.global_id} prediction failed: {exc!r}")
+
+            if verbose:
+                disp = cal.objective_display_values()[0]
+                s = ", ".join(f"{n}={v:.4f}" for n, v in zip(cal.objective_names, disp))
+                print(f"[{gi+1}/{len(self._global_events)}] GE{ge.global_id} ({len(members)} sub): {s}, success={success}")
+
+            last_x = best_x
+            last_names = problem.param_names
+            cal_results.append(cal)
+            fitted_events.append(ge)
+            fitted_areas.append(fitted_ae)
+
+        return SequentialFitSummary(
+            events=fitted_events,
+            calibration_results=cal_results,
+            global_predicted=pd.DataFrame({"datetime": datetime_arr, "Q_pred": Q_global}),
+            global_observed=data[["datetime", "stormflow"]].copy(),
+            model_class_name=self._factory().__class__.__name__,
+            fitted_effective_areas=fitted_areas,
+        )
+
+
+__all__ = ["SequentialFitter", "SequentialFitSummary", "GlobalSequentialFitter"]

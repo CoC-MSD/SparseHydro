@@ -218,6 +218,107 @@ class RMSE(IObjective):
         return float(np.sqrt(np.mean((obs - pred) ** 2)))
 
 
+class WeightedRMSE(IObjective):
+    """Weighted root mean squared error with per-timestep weights.
+
+    ``wrmse = sqrt( Σ w_i (obs_i - pred_i)² / Σ w_i )``
+
+    Used for zonal (peak vs tail) weighting in sequential unit-hydrograph
+    fitting: assign a larger weight to the peak zone so the fitted UH reproduces
+    the crest shape.  When no *weights* are supplied it reduces to unweighted
+    :class:`RMSE`.
+
+    :param weights: Full-length per-timestep weight vector aligned with the
+        observed/predicted arrays passed to :meth:`compute`.  ``None`` (default)
+        falls back to uniform weighting.
+    :type weights: numpy.ndarray or None
+    :param mask: Optional per-objective boolean mask (see :class:`IObjective`).
+    :type mask: numpy.ndarray or None
+    """
+
+    name = "wrmse"
+    minimize = True
+
+    def __init__(self, weights: np.ndarray | None = None, mask: np.ndarray | None = None) -> None:
+        super().__init__(mask=mask)
+        self.weights = None if weights is None else np.asarray(weights, dtype=float)
+
+    def evaluate(self, observed: np.ndarray, predicted: np.ndarray) -> float:
+        """Unweighted RMSE fallback (used when no weights are set).
+
+        :param observed: 1-D array of observed values.
+        :type observed: numpy.ndarray
+        :param predicted: 1-D array of predicted values (same shape).
+        :type predicted: numpy.ndarray
+        :returns: Unweighted root mean squared error.
+        :rtype: float
+        """
+        obs = np.asarray(observed, dtype=float)
+        pred = np.asarray(predicted, dtype=float)
+        if obs.shape != pred.shape:
+            raise ValueError(
+                f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}"
+            )
+        return float(np.sqrt(np.mean((obs - pred) ** 2)))
+
+    def compute(
+        self,
+        observed: np.ndarray,
+        predicted: np.ndarray,
+        mask: np.ndarray | None = None,
+    ) -> float:
+        """Compute weighted RMSE over the NaN- and mask-selected subset.
+
+        :param observed: 1-D array of observed values.
+        :type observed: numpy.ndarray
+        :param predicted: 1-D array of predicted values (same shape).
+        :type predicted: numpy.ndarray
+        :param mask: Optional boolean mask; falls back to :attr:`mask`.
+        :type mask: numpy.ndarray or None
+        :returns: Weighted root mean squared error.
+        :rtype: float
+        :raises ValueError: On shape mismatch or when nothing remains after masking.
+        """
+        obs = np.asarray(observed, dtype=float)
+        pred = np.asarray(predicted, dtype=float)
+        if obs.shape != pred.shape:
+            raise ValueError(
+                f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}"
+            )
+        effective = mask if mask is not None else self.mask
+        selector = ~(np.isnan(obs) | np.isnan(pred))
+        if effective is not None:
+            if isinstance(effective, str) or callable(effective):
+                raise TypeError(
+                    "A column-name or callable mask cannot be applied directly; "
+                    "resolve it through CalibrationProblem, or pass a boolean array."
+                )
+            m = np.asarray(effective, dtype=bool)
+            if m.shape != obs.shape:
+                raise ValueError(
+                    f"mask shape {m.shape} does not match observed shape {obs.shape}"
+                )
+            selector &= m
+        if not selector.any():
+            raise ValueError(
+                "mask (and NaN removal) selects no elements; cannot compute objective."
+            )
+        e = obs[selector] - pred[selector]
+        if self.weights is None:
+            return float(np.sqrt(np.mean(e ** 2)))
+        w = self.weights
+        if w.shape != obs.shape:
+            raise ValueError(
+                f"weights shape {w.shape} does not match observed shape {obs.shape}"
+            )
+        w_sel = np.clip(w[selector], 0.0, None)
+        wsum = float(np.sum(w_sel))
+        if wsum <= 0.0:
+            return float(np.sqrt(np.mean(e ** 2)))
+        return float(np.sqrt(float(np.sum(w_sel * e ** 2)) / wsum))
+
+
+
 class MAE(IObjective):
     """Mean absolute error.
 

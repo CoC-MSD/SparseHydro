@@ -23,7 +23,7 @@ from .parameters import FieldRecord, ScalarParameter, VectorParameter
 from .registry import ModelRegistry, registry
 from .models import IModel, ITorchModel, IUnitHydroComponent
 
-__version__ = "0.1.0a1"
+__version__ = "1.0.0a1"
 
 __all__ = [
     "ModelState",

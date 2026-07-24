@@ -67,6 +67,10 @@ try:
         plot_sequential_fit,
         plot_parameter_evolution,
         plot_effective_area,
+        plot_variable_savgol,
+        plot_event_hierarchy,
+        plot_uh_shapes,
+        plot_convolution,
     )
 
 except ImportError:
@@ -127,6 +131,18 @@ except ImportError:
 
     def plot_effective_area(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_effective_area. Install with: pip install plotly")
+
+    def plot_variable_savgol(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_variable_savgol. Install with: pip install plotly")
+
+    def plot_event_hierarchy(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_event_hierarchy. Install with: pip install plotly")
+
+    def plot_uh_shapes(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_uh_shapes. Install with: pip install plotly")
+
+    def plot_convolution(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError("plotly is required for plot_convolution. Install with: pip install plotly")
 
     def plot_data_explorer(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_data_explorer. Install with: pip install plotly")
@@ -197,4 +213,8 @@ __all__ = [
     "plot_sequential_fit",
     "plot_parameter_evolution",
     "plot_effective_area",
+    "plot_variable_savgol",
+    "plot_event_hierarchy",
+    "plot_uh_shapes",
+    "plot_convolution",
 ]

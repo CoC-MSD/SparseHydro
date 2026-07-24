@@ -544,9 +544,52 @@ def detect_events(
     return events, fr
 
 
+# ---------------------------------------------------------------------------
+# Hierarchical detection (global + sub events) — Parsimonious workflow
+# ---------------------------------------------------------------------------
+
+from .records import (  # noqa: E402
+    SubEventRecord,
+    GlobalEvent,
+    sub_events_to_dataframe,
+    global_events_to_dataframe,
+)
+from .smoothing import (  # noqa: E402
+    VariableSavgolResult,
+    variable_savgol_smooth,
+    seed_curvature,
+    savgol_curvature,
+    savgol_slope,
+    apply_peak_lift,
+)
+from .peaks import define_peaks  # noqa: E402
+from .bimodality import (  # noqa: E402
+    calculate_rain_bimodality,
+    calculate_peak_zone_bimodality,
+)
+from .zones import define_complete_event_zones  # noqa: E402
+from .hierarchy import detect_event_hierarchy  # noqa: E402
+
+
 __all__ = [
     "EventRecord",
     "detect_events",
     "events_to_dataframe",
     "load_events_from_csv",
+    # Hierarchical detection
+    "SubEventRecord",
+    "GlobalEvent",
+    "sub_events_to_dataframe",
+    "global_events_to_dataframe",
+    "VariableSavgolResult",
+    "variable_savgol_smooth",
+    "seed_curvature",
+    "savgol_curvature",
+    "savgol_slope",
+    "apply_peak_lift",
+    "define_peaks",
+    "calculate_rain_bimodality",
+    "calculate_peak_zone_bimodality",
+    "define_complete_event_zones",
+    "detect_event_hierarchy",
 ]

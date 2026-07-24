@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sparsehydro"
-version = "0.1.0a1"
+version = "1.0.0a1"
 description = "Interface specifications for parsimonious hydrological models"
 readme = "README.md"
 license = { file = "LICENSE" }

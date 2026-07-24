@@ -81,8 +81,7 @@ class RDIIModel(IModel):
         model.finalize()
 
         # Mix RTK and Nash UH:
-        from sparsehydro.models.unithydrograph import create_uh_model
-        NashUH = create_uh_model("Nash")
+        from sparsehydro.models.unithydrograph import NashUH
         model2 = RDIIModel(
             ia_model=IAModel(),
             uh_components=[RTKTriangle(R=0.05, T=1.0, K=1.5), NashUH()],
