@@ -39,6 +39,9 @@ Thumbs.db
 *.zip
 MANIFEST
 
+# Local legacy reference material
+/legacy/
+
 # Secrets / credentials (never commit)
 ayyeka_auth.py
 flowfinity_auth.py
