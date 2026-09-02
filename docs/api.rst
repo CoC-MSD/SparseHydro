@@ -148,6 +148,13 @@ RDII-Specific Plots
    :members:
    :show-inheritance:
 
+Seasonality Plots
+~~~~~~~~~~~~~~~~~
+
+.. automodule:: sparsehydro.visualization.seasonality
+   :members:
+   :show-inheritance:
+
 Calibration Dashboard
 ~~~~~~~~~~~~~~~~~~~~~
 
@@ -329,13 +336,6 @@ UH models and :class:`~sparsehydro.models.EnsembleModel` composites:
    print(summary.parameter_evolution())    # fitted params per event
 
 .. automodule:: sparsehydro.models.unithydrograph.sequential
-   :members:
-   :show-inheritance:
-
-Adapter (legacy)
-~~~~~~~~~~~~~~~~
-
-.. automodule:: sparsehydro.models.unithydrograph.adapter
    :members:
    :show-inheritance:
 

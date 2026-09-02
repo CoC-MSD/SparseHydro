@@ -59,6 +59,7 @@ try:
         plot_splom,
     )
     from .rdii import plot_rdii_components, plot_rtk_shape
+    from .seasonality import plot_seasonality_components
     from .dashboard import plot_calibration_dashboard
     from .unithydrograph import (
         plot_rainfall_flow_with_events,
@@ -110,6 +111,11 @@ except ImportError:
 
     def plot_rdii_components(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_rdii_components. Install with: pip install plotly")
+
+    def plot_seasonality_components(*args, **kwargs):  # type: ignore[misc]
+        raise ImportError(
+            "plotly is required for plot_seasonality_components. Install with: pip install plotly"
+        )
 
     def plot_calibration_dashboard(*args, **kwargs):  # type: ignore[misc]
         raise ImportError("plotly is required for plot_calibration_dashboard. Install with: pip install plotly")
@@ -204,6 +210,8 @@ __all__ = [
     # RDII
     "plot_rtk_shape",
     "plot_rdii_components",
+    # Seasonality
+    "plot_seasonality_components",
     # Dashboard
     "plot_calibration_dashboard",
     # Unit hydrograph workflow

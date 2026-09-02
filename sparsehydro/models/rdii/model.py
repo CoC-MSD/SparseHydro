@@ -132,6 +132,16 @@ class RDIIModel(IModel):
         """
         return len(self._uh_components)
 
+    @property
+    def ia_model(self) -> IModel:
+        """The initial-abstraction sub-model."""
+        return self._ia_model
+
+    @property
+    def uh_components(self) -> list[IUnitHydroComponent]:
+        """The unit hydrograph components, in registration order."""
+        return list(self._uh_components)
+
     # ------------------------------------------------------------------
     # IModel lifecycle
     # ------------------------------------------------------------------
@@ -349,6 +359,51 @@ class RDIIModel(IModel):
         })
         self._state = ModelState.PREDICTED
         return result
+
+    def predict_components(self) -> pd.DataFrame:
+        """Compute the RDII contribution of each UH component separately.
+
+        Runs the same IA + convolution pipeline as :meth:`predict` but keeps
+        each component's flow contribution in its own column, ready for
+        :func:`~sparsehydro.visualization.plot_rdii_components`.
+
+        :returns: DataFrame with columns ``datetime``, the rainfall column,
+            the excess column, ``rdii_component_1 … rdii_component_N`` (flow
+            per component [CFS]), and ``rdii_cfs`` (their sum).
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If ``prepare()`` has not been called.
+        """
+        if self._prepared_df is None:
+            raise RuntimeError("Call prepare(data) before predict_components().")
+
+        self._sync_to_submodels()
+
+        ia_result = self._ia_model.predict()
+        p_excess = ia_result[self._excess_col].to_numpy(dtype=float)
+        n = len(p_excess)
+        area_acres = self.get_scalar_parameter("area_acres").value
+
+        out: dict[str, Any] = {
+            "datetime": self._prepared_df["datetime"].values,
+            self._rainfall_col: self._prepared_df[self._rainfall_col].to_numpy(dtype=float),
+            self._excess_col: p_excess.copy(),
+        }
+
+        total = np.zeros(n, dtype=float)
+        for i, uh in enumerate(self._uh_components, 1):
+            R_i = self.get_scalar_parameter(f"R_{i}").value
+            kernel = uh.get_kernel(self._dt_hours)
+            if max(n, len(kernel)) > _FFT_THRESHOLD:
+                from scipy.signal import fftconvolve  # type: ignore[import]
+                conv = fftconvolve(p_excess, kernel, mode="full")[:n]
+            else:
+                conv = np.convolve(p_excess, kernel, mode="full")[:n]
+            component_cfs = np.clip(R_i * conv, 0.0, None) * area_acres * self._depth_to_cfs
+            out[f"rdii_component_{i}"] = component_cfs
+            total += component_cfs
+
+        out["rdii_cfs"] = total
+        return pd.DataFrame(out)
 
     def finalize(self) -> None:
         """Release stored data and advance to FINALIZED.
