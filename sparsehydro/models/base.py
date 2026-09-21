@@ -87,6 +87,12 @@ class IModel(ABC):
     #: Must be defined by every concrete subclass.
     model_name: ClassVar[str]
 
+    #: Whether this model implements :meth:`predict_arrays` natively rather than
+    #: inheriting the DataFrame-unwrapping default.  Informational only --
+    #: :class:`~sparsehydro.calibration.problem.CalibrationProblem` calls
+    #: :meth:`predict_arrays` unconditionally, so nothing branches on this.
+    supports_array_predict: ClassVar[bool] = False
+
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
         # Abstract subclasses (those that still have unimplemented abstract
@@ -231,6 +237,36 @@ class IModel(ABC):
         :returns: Model outputs, typically with a predicted-flow column.
         :rtype: pandas.DataFrame | pandas.Series
         """
+
+    def predict_arrays(self) -> dict[str, np.ndarray]:
+        """Return :meth:`predict`'s output as plain arrays, without a DataFrame.
+
+        The calibration loop calls this instead of :meth:`predict` so the hot
+        path never builds a DataFrame that the caller immediately unwraps again.
+
+        This default implementation simply unwraps :meth:`predict`, so every
+        existing model works unchanged and is no slower than before.  Models that
+        can produce the arrays directly should override it -- and must return
+        exactly the keys of ``predict().columns``, with values equal to
+        ``predict()[col].to_numpy()``.  ``tests/test_fastpath_invariants.py``
+        enforces that equivalence.
+
+        Prefer building :meth:`predict` on top of this method rather than the
+        other way around: a model with two independent implementations will
+        eventually have two different answers.
+
+        Returned arrays may be views into model state; callers must not mutate
+        them.
+
+        :returns: Mapping of output column name to 1-D array.
+        :rtype: dict[str, numpy.ndarray]
+        """
+        out = self.predict()
+        if isinstance(out, pd.Series):
+            return {str(out.name): out.to_numpy()}
+        # Deliberately untyped: forcing dtype=float here would corrupt a
+        # datetime64 column.
+        return {str(c): out[c].to_numpy() for c in out.columns}
 
     @abstractmethod
     def finalize(self) -> None:

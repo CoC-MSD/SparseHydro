@@ -65,7 +65,7 @@ Subclass :class:`IObjective`, set ``name`` and ``minimize``, and implement
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import ClassVar
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -171,7 +171,58 @@ class IObjective(ABC):
             raise ValueError(
                 "mask (and NaN removal) selects no elements; cannot compute objective."
             )
-        return self.evaluate(obs[selector], pred[selector])
+        return self.compute_selected(
+            obs[selector], pred[selector], self.prepare_observed(obs[selector], selector)
+        )
+
+    # ------------------------------------------------------------------
+    # Pre-selected fast path
+    # ------------------------------------------------------------------
+
+    def prepare_observed(self, observed: np.ndarray, selector: np.ndarray) -> Any:
+        """Precompute whatever this objective can derive from *observed* alone.
+
+        :class:`~sparsehydro.calibration.problem.CalibrationProblem` calls this
+        once at construction and hands the result back to every
+        :meth:`compute_selected` call, so observed-only work (weights, variance,
+        means) is not redone on every parameter evaluation.
+
+        The returned context must be treated as immutable: one context is shared
+        across every evaluation and across problem copies.
+
+        :param observed: Observed values, already NaN- and mask-filtered.
+        :type observed: numpy.ndarray
+        :param selector: Boolean selector that produced *observed*, for
+            objectives carrying full-length auxiliary arrays (e.g. weights).
+        :type selector: numpy.ndarray
+        :returns: Opaque context passed to :meth:`compute_selected`; ``None``
+            when the objective needs none.
+        :rtype: typing.Any
+        """
+        return None
+
+    def compute_selected(
+        self,
+        observed: np.ndarray,
+        predicted: np.ndarray,
+        context: Any = None,
+    ) -> float:
+        """Score already-selected arrays, skipping NaN and mask filtering.
+
+        Both inputs must already be NaN-free and mask-filtered.  This is the
+        method the calibration hot path calls; :meth:`compute` does the
+        filtering and then delegates here, so the two can never disagree.
+
+        :param observed: Selected observed values.
+        :type observed: numpy.ndarray
+        :param predicted: Selected predicted values (same shape).
+        :type predicted: numpy.ndarray
+        :param context: Value returned by :meth:`prepare_observed`.
+        :type context: typing.Any
+        :returns: Scalar objective value.
+        :rtype: float
+        """
+        return self.evaluate(observed, predicted)
 
 
 # ---------------------------------------------------------------------------
@@ -261,62 +312,57 @@ class WeightedRMSE(IObjective):
             )
         return float(np.sqrt(np.mean((obs - pred) ** 2)))
 
-    def compute(
+    def prepare_observed(self, observed: np.ndarray, selector: np.ndarray) -> Any:
+        """Select and validate the weight vector for this selector.
+
+        Weights are full-length and aligned with the unfiltered series, so they
+        must be subset by the same selector -- doing it once here keeps it off
+        the hot path.
+
+        :param observed: Selected observed values.
+        :type observed: numpy.ndarray
+        :param selector: Boolean selector that produced *observed*.
+        :type selector: numpy.ndarray
+        :returns: Clipped, selected weights, or ``None`` to fall back to
+            unweighted RMSE (no weights set, wrong length, or non-positive sum).
+        :rtype: numpy.ndarray or None
+        :raises ValueError: If the weight vector length does not match *selector*.
+        """
+        if self.weights is None:
+            return None
+        w = self.weights
+        if w.shape != selector.shape:
+            raise ValueError(
+                f"weights shape {w.shape} does not match observed shape {selector.shape}"
+            )
+        w_sel = np.clip(w[selector], 0.0, None)
+        if float(np.sum(w_sel)) <= 0.0:
+            return None
+        return w_sel
+
+    def compute_selected(
         self,
         observed: np.ndarray,
         predicted: np.ndarray,
-        mask: np.ndarray | None = None,
+        context: Any = None,
     ) -> float:
-        """Compute weighted RMSE over the NaN- and mask-selected subset.
+        """Compute weighted RMSE over already-selected arrays.
 
-        :param observed: 1-D array of observed values.
+        :param observed: Selected observed values.
         :type observed: numpy.ndarray
-        :param predicted: 1-D array of predicted values (same shape).
+        :param predicted: Selected predicted values (same shape).
         :type predicted: numpy.ndarray
-        :param mask: Optional boolean mask; falls back to :attr:`mask`.
-        :type mask: numpy.ndarray or None
+        :param context: Selected weights from :meth:`prepare_observed`, or
+            ``None`` for the unweighted fallback.
+        :type context: numpy.ndarray or None
         :returns: Weighted root mean squared error.
         :rtype: float
-        :raises ValueError: On shape mismatch or when nothing remains after masking.
         """
-        obs = np.asarray(observed, dtype=float)
-        pred = np.asarray(predicted, dtype=float)
-        if obs.shape != pred.shape:
-            raise ValueError(
-                f"Shape mismatch: observed {obs.shape} vs predicted {pred.shape}"
-            )
-        effective = mask if mask is not None else self.mask
-        selector = ~(np.isnan(obs) | np.isnan(pred))
-        if effective is not None:
-            if isinstance(effective, str) or callable(effective):
-                raise TypeError(
-                    "A column-name or callable mask cannot be applied directly; "
-                    "resolve it through CalibrationProblem, or pass a boolean array."
-                )
-            m = np.asarray(effective, dtype=bool)
-            if m.shape != obs.shape:
-                raise ValueError(
-                    f"mask shape {m.shape} does not match observed shape {obs.shape}"
-                )
-            selector &= m
-        if not selector.any():
-            raise ValueError(
-                "mask (and NaN removal) selects no elements; cannot compute objective."
-            )
-        e = obs[selector] - pred[selector]
-        if self.weights is None:
+        e = observed - predicted
+        if context is None:
             return float(np.sqrt(np.mean(e ** 2)))
-        w = self.weights
-        if w.shape != obs.shape:
-            raise ValueError(
-                f"weights shape {w.shape} does not match observed shape {obs.shape}"
-            )
-        w_sel = np.clip(w[selector], 0.0, None)
-        wsum = float(np.sum(w_sel))
-        if wsum <= 0.0:
-            return float(np.sqrt(np.mean(e ** 2)))
-        return float(np.sqrt(float(np.sum(w_sel * e ** 2)) / wsum))
-
+        wsum = float(np.sum(context))
+        return float(np.sqrt(float(np.sum(context * e ** 2)) / wsum))
 
 
 class MAE(IObjective):
