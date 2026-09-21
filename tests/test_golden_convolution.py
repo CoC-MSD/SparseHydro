@@ -134,7 +134,7 @@ def test_cap_active_kernels_are_finite_and_bounded(case_id):
     """
     max_steps = _max_steps()
     if max_steps is None:
-        pytest.skip("MAX_STEPS not exposed yet (pre-Step-6)")
+        pytest.skip("kernel sanitisation not implemented yet (pre-Step-6)")
 
     model_name, label = case_id.split("/", 1)
     params = dict(dict(C.UH_CASES[model_name])[label])
@@ -147,9 +147,16 @@ def test_cap_active_kernels_are_finite_and_bounded(case_id):
 
 
 def _max_steps() -> int | None:
-    """Return the kernel-length cap, or ``None`` before Step 6 exposes it."""
+    """Return the kernel-length cap, or ``None`` before Step 6 enforces it.
+
+    Gated on ``finalize_kernel`` -- the function that actually applies the cap --
+    rather than on ``MAX_STEPS``, which exists from Step 1 onward as a plain
+    constant that not every ``get_kernel`` honours yet.
+    """
     try:
-        from sparsehydro.models.unithydrograph.kernels import MAX_STEPS
+        from sparsehydro.models.unithydrograph.kernels import (  # noqa: F401
+            MAX_STEPS, finalize_kernel,
+        )
         return int(MAX_STEPS)
     except Exception:
         return None

@@ -19,12 +19,15 @@ from __future__ import annotations
 from typing import ClassVar
 
 import numpy as np
-import pandas as pd
 
 from ...enums import ModelState
-from ..base import IUnitHydroComponent
 from ...parameters import ScalarParameter
-from .models import _MAX_STEPS, _infer_dt_hours, _normalize_kernel, _trim_pad
+from .base import UnitHydrographBase
+from .kernels import (
+    MAX_STEPS as _MAX_STEPS,
+    normalize_kernel as _normalize_kernel,
+    trim_pad as _trim_pad,
+)
 
 
 def _triangle_raw(tp: float, tt: float, ts: np.ndarray) -> np.ndarray:
@@ -63,7 +66,7 @@ def _gamma_raw(tt: float, tp: float, ts: np.ndarray) -> np.ndarray:
     return np.maximum(raw, 0.0)
 
 
-class PeakTailUH(IUnitHydroComponent):
+class PeakTailUH(UnitHydrographBase):
     """Blended peak (triangle) + tail (gamma) unit hydrograph.
 
     This is the default sequential-fit model in the Parsimonious workflow: a
@@ -88,7 +91,6 @@ class PeakTailUH(IUnitHydroComponent):
     """
 
     model_name: ClassVar[str] = "peak-tail-uh"
-    _amplitude_param_name: ClassVar[str | None] = "A"
 
     def __init__(
         self,
@@ -108,7 +110,6 @@ class PeakTailUH(IUnitHydroComponent):
         self._peak_tt_init = float(peak_tt)
         self._tail_tt_init = float(tail_tt)
         self._tail_tp_init = float(tail_tp)
-        self._data: pd.DataFrame | None = None
 
     def initialize(self) -> None:
         """Register the blend, delay, peak, and tail parameters; advance to INITIALIZED.
@@ -116,9 +117,6 @@ class PeakTailUH(IUnitHydroComponent):
         :returns: Nothing.
         :rtype: None
         """
-        self._scalars = {}
-        self._vectors = {}
-        self._constraints = []
         self.register_scalar_parameter(ScalarParameter("A", value=self._A_init, lower_bound=0.0, upper_bound=1e4, description="Effective area ratio"))
         self.register_scalar_parameter(ScalarParameter("w", value=self._w_init, lower_bound=0.0, upper_bound=1.0, description="Tail area fraction"))
         self.register_scalar_parameter(ScalarParameter("td", value=self._td_init, lower_bound=0.0, upper_bound=200.0, units="steps", description="Shared response delay in time steps"))
@@ -128,56 +126,40 @@ class PeakTailUH(IUnitHydroComponent):
         self.register_scalar_parameter(ScalarParameter("tail_tp", value=self._tail_tp_init, lower_bound=0.01, upper_bound=500.0, units="steps", description="Tail gamma time to peak"))
         self._state = ModelState.INITIALIZED
 
-    def validate(self) -> bool:
-        """Validate parameter bounds and the ``peak_tp < peak_tt`` ordering constraint.
+    def _extra_valid(self) -> bool:
+        """Return whether the ``peak_tp < peak_tt`` ordering constraint holds.
 
-        :returns: ``True`` if all parameters are within bounds and ``peak_tp < peak_tt``.
+        :returns: ``True`` when the triangle's time-to-peak precedes its duration.
         :rtype: bool
         """
-        ok = self.parameters_valid()
-        if ok and self.get_scalar_parameter("peak_tp").value >= self.get_scalar_parameter("peak_tt").value:
-            ok = False
-        if ok:
-            self._state = ModelState.VALIDATED
-        return ok
+        return self._p("peak_tp") < self._p("peak_tt")
 
-    def prepare(self, data: pd.DataFrame) -> None:
-        """Cache forcing data and coerce the ``datetime`` column.
+    def _weighted_parts(self, dt_hours: float) -> tuple[np.ndarray, np.ndarray]:
+        """Return the ``(1-w)``-scaled peak and ``w``-scaled tail contributions.
 
-        :param data: DataFrame with ``datetime`` and ``rain`` columns.
-        :type data: pandas.DataFrame
-        :returns: Nothing.
-        :rtype: None
+        Both share one time base aligned at the common delay, so they overlap and
+        sum to the combined kernel.  Factored out so :meth:`get_kernel` and
+        :meth:`component_kernels` cannot drift apart.
+
+        :param dt_hours: Time-step size [hr].
+        :type dt_hours: float
+        :returns: ``(peak_contribution, tail_contribution)``, equal length.
+        :rtype: tuple[numpy.ndarray, numpy.ndarray]
         """
-        self._data = data.copy()
-        self._data["datetime"] = pd.to_datetime(self._data["datetime"])
-        self._state = ModelState.PREPARED
+        w = min(max(self._p("w"), 0.0), 1.0)
+        td = max(self._p("td"), 0.0)
+        peak_tp = max(self._p("peak_tp"), 1e-6)
+        peak_tt = max(self._p("peak_tt"), peak_tp + 1e-6)
+        tail_tt = self._p("tail_tt")
+        tail_tp = max(self._p("tail_tp"), 1e-6)
 
-    def predict(self) -> pd.DataFrame:
-        """Convolve rainfall with the blended peak+tail kernel and return predicted flow.
+        max_steps = min(_MAX_STEPS, max(int(peak_tt + 5 * tail_tp + td + 1), 20))
+        t = np.arange(max_steps, dtype=float)
+        ts = t - td
 
-        :returns: DataFrame with columns ``datetime`` and ``Q_pred``.
-        :rtype: pandas.DataFrame
-        :raises RuntimeError: If :meth:`prepare` has not been called.
-        """
-        if self._data is None:
-            raise RuntimeError("Call prepare() before predict().")
-        A = self.get_scalar_parameter("A").value
-        dt = _infer_dt_hours(self._data)
-        rain = self._data["rain"].values.astype(float)
-        kernel = self.get_kernel(dt_hours=dt)
-        Q = np.convolve(rain, kernel * A * dt, mode="full")[: len(rain)]
-        self._state = ModelState.PREDICTED
-        return pd.DataFrame({"datetime": self._data["datetime"].values, "Q_pred": Q})
-
-    def finalize(self) -> None:
-        """Release cached forcing data and advance to FINALIZED.
-
-        :returns: Nothing.
-        :rtype: None
-        """
-        self._data = None
-        self._state = ModelState.FINALIZED
+        peak_norm = _normalize_kernel(_triangle_raw(peak_tp, peak_tt, ts), dt_hours)
+        tail_norm = _normalize_kernel(_gamma_raw(tail_tt, tail_tp, ts), dt_hours)
+        return (1.0 - w) * peak_norm, w * tail_norm
 
     def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
         """Return the normalized blended peak+tail UH ordinate array.
@@ -193,21 +175,32 @@ class PeakTailUH(IUnitHydroComponent):
         :returns: Normalized UH ordinates [1/hr] such that ``sum * dt_hours ≈ 1``.
         :rtype: numpy.ndarray
         """
-        w = min(max(self.get_scalar_parameter("w").value, 0.0), 1.0)
-        td = max(self.get_scalar_parameter("td").value, 0.0)
-        peak_tp = max(self.get_scalar_parameter("peak_tp").value, 1e-6)
-        peak_tt = max(self.get_scalar_parameter("peak_tt").value, peak_tp + 1e-6)
-        tail_tt = self.get_scalar_parameter("tail_tt").value
-        tail_tp = max(self.get_scalar_parameter("tail_tp").value, 1e-6)
+        peak_c, tail_c = self._weighted_parts(dt_hours)
+        return _trim_pad(peak_c + tail_c, n_steps)
 
-        max_steps = min(_MAX_STEPS, max(int(peak_tt + 5 * tail_tp + td + 1), 20))
-        t = np.arange(max_steps, dtype=float)
-        ts = t - td
+    def component_kernels(self, dt_hours: float, n_steps: int | None = None) -> dict[str, np.ndarray]:
+        """Return the weighted peak and tail contributions and their sum.
 
-        peak_norm = _normalize_kernel(_triangle_raw(peak_tp, peak_tt, ts), dt_hours)
-        tail_norm = _normalize_kernel(_gamma_raw(tail_tt, tail_tp, ts), dt_hours)
-        blend = (1.0 - w) * peak_norm + w * tail_norm
-        return _trim_pad(blend, n_steps)
+        All three arrays share the same time base (aligned at the common delay),
+        so the peak and tail contributions **overlap** and add up to the combined
+        kernel: ``peak + tail == combined``.  Useful for overlaying the two
+        constituent shapes on one axis rather than seeing only the blended curve.
+
+        :param dt_hours: Time-step size [hr].
+        :type dt_hours: float
+        :param n_steps: Number of output steps; defaults to the natural support.
+        :type n_steps: int | None
+        :returns: Mapping with keys ``"peak"``, ``"tail"``, ``"combined"`` — each
+            a normalized ordinate array (the peak/tail entries are already scaled
+            by ``1 - w`` and ``w`` respectively).
+        :rtype: dict[str, numpy.ndarray]
+        """
+        peak_c, tail_c = self._weighted_parts(dt_hours)
+        return {
+            "peak": _trim_pad(peak_c, n_steps),
+            "tail": _trim_pad(tail_c, n_steps),
+            "combined": _trim_pad(peak_c + tail_c, n_steps),
+        }
 
 
 __all__ = ["PeakTailUH"]

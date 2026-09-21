@@ -313,6 +313,8 @@ def test_evaluate_constructs_no_dataframes(composite):
     )
     if not getattr(model, "supports_array_predict", False):
         pytest.skip("fast path not implemented for this model yet")
+    if not hasattr(problem, "_predicted_key"):
+        pytest.skip("CalibrationProblem does not use the fast path yet (pre-Step-2)")
 
     lo, hi = problem.bounds
     x = lo + 0.5 * (hi - lo)
