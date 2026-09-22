@@ -406,6 +406,9 @@ class SequentialFitter:
     def _optimise(self, problem, x0, xl, xu, method, obj_idx):
         """Minimise a single objective of *problem* from start point *x0*.
 
+        Delegates to :func:`_optimise_problem`; kept as a method because it is
+        part of this class's established surface.
+
         :param problem: Calibration problem exposing ``evaluate``.
         :type problem: CalibrationProblem
         :param x0: Initial parameter vector.
@@ -422,23 +425,7 @@ class SequentialFitter:
         :returns: Tuple ``(best_x, success)``.
         :rtype: tuple[numpy.ndarray, bool]
         """
-        bounds_list = list(zip(xl.tolist(), xu.tolist()))
-
-        def scalar_fn(x):
-            return float(problem.evaluate(x)[obj_idx])
-
-        if method == "differential_evolution":
-            res = differential_evolution(scalar_fn, bounds=bounds_list, rng=42, polish=True)
-            return res.x, bool(res.success)
-
-        try:
-            res = scipy_minimize(
-                scalar_fn, x0=x0, bounds=Bounds(lb=xl, ub=xu), method=method,
-                options={"maxiter": 2000, "xatol": 1e-6, "fatol": 1e-8},
-            )
-            return res.x, bool(res.success)
-        except Exception:
-            return x0.copy(), False
+        return _optimise_problem(problem, x0, xl, xu, method, obj_idx)
 
     def _filter_data(self, time_range):
         """Return the forcing data optionally restricted to *time_range*.
@@ -489,8 +476,17 @@ def _optimise_problem(problem, x0, xl, xu, method, obj_idx):
     """
     bounds_list = list(zip(xl.tolist(), xu.tolist()))
 
-    def scalar_fn(x):
-        return float(problem.evaluate(x)[obj_idx])
+    # Only one objective is minimised here, but a problem typically carries
+    # several; evaluate_single() skips the ones whose values are discarded.
+    # Resolved once rather than per call, and falls back for any problem-like
+    # object that predates the method.
+    evaluate_single = getattr(problem, "evaluate_single", None)
+    if evaluate_single is not None:
+        def scalar_fn(x):
+            return evaluate_single(x, obj_idx)
+    else:
+        def scalar_fn(x):
+            return float(problem.evaluate(x)[obj_idx])
 
     if method == "differential_evolution":
         res = differential_evolution(scalar_fn, bounds=bounds_list, rng=42, polish=True)
