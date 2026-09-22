@@ -51,6 +51,8 @@ class TankAbstractionModel(IModel):
     :type n_substeps: int
     """
 
+    supports_array_predict: ClassVar[bool] = True
+
     #: Name of the subclass drainage parameter (e.g. ``"tank_qd"`` or ``"tank_k"``).
     _drain_param_name: ClassVar[str] = "tank_drain"
     _drain_lower: ClassVar[float] = 1e-6
@@ -152,12 +154,11 @@ class TankAbstractionModel(IModel):
         self._prepared_df = df
         self._state = ModelState.PREPARED
 
-    def predict(self) -> pd.DataFrame:
-        """Advance the tank over the series and return effective rainfall.
+    def predict_arrays(self) -> dict[str, np.ndarray]:
+        """Advance the tank over the series, returning plain arrays.
 
-        :returns: DataFrame with columns ``datetime`` and the unit-specific
-            excess column (``p_excess_in`` or ``p_excess_mm``).
-        :rtype: pandas.DataFrame
+        :returns: Mapping with ``datetime`` and the unit-specific excess column.
+        :rtype: dict[str, numpy.ndarray]
         :raises RuntimeError: If :meth:`prepare` has not been called.
         """
         if self._prepared_df is None:
@@ -183,9 +184,18 @@ class TankAbstractionModel(IModel):
                 V -= self._drainage_full(V, drain) / n
                 V = min(max(V, 0.0), V_tank)
 
-        result = pd.DataFrame({"datetime": df["datetime"].values, self._excess_col: excess})
         self._state = ModelState.PREDICTED
-        return result
+        return {"datetime": df["datetime"].values, self._excess_col: excess}
+
+    def predict(self) -> pd.DataFrame:
+        """Advance the tank over the series and return effective rainfall.
+
+        :returns: DataFrame with columns ``datetime`` and the unit-specific
+            excess column (``p_excess_in`` or ``p_excess_mm``).
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
+        return pd.DataFrame(self.predict_arrays())
 
     def finalize(self) -> None:
         """Release stored forcing data and advance to FINALIZED.

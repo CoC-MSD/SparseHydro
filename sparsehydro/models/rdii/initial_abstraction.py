@@ -105,6 +105,7 @@ class IAModel(IModel):
     """
 
     model_name = "initial-abstraction"
+    supports_array_predict = True
 
     def __init__(
         self,
@@ -147,6 +148,12 @@ class IAModel(IModel):
         self.T_freeze = float(T_freeze)
         self.ia_avail: float = self.ia_max
         self._prepared_df: pd.DataFrame | None = None
+        # Forcing arrays and timestep cached by prepare(); see predict_arrays().
+        self._dt_hours: float = 1.0 / 12.0
+        self._dt_arr: np.ndarray | None = None
+        self._rain_arr: np.ndarray | None = None
+        self._temp_arr: np.ndarray | None = None
+        self._datetime_arr: np.ndarray | None = None
 
     # ------------------------------------------------------------------
     # IModel lifecycle
@@ -268,32 +275,36 @@ class IAModel(IModel):
             df["temperature_c"] = df["temperature_c"].fillna(T_ref)
 
         self._prepared_df = df
+        # Cache the arrays predict() needs.  These are fixed for the prepared
+        # window, but predict() used to re-derive the timestep with a pandas
+        # diff/median and reallocate dt_arr on every call -- once per candidate
+        # parameter set, throughout a calibration.
+        diffs = df["datetime"].diff().dropna()
+        self._dt_hours = pd.Timedelta(diffs.median()).total_seconds() / 3600.0
+        self._dt_arr = np.full(len(df), self._dt_hours)
+        self._rain_arr = df[self._rainfall_col].to_numpy(dtype=float)
+        self._temp_arr = df["temperature_c"].to_numpy(dtype=float)
+        self._datetime_arr = df["datetime"].values
         self._sync_from_params()
         self.reset()
         self._state = ModelState.PREPARED
 
-    def predict(self) -> pd.DataFrame:
-        """Compute rainfall excess for the prepared time series.
+    def predict_arrays(self) -> dict[str, np.ndarray]:
+        """Compute rainfall excess, returning plain arrays.
 
-        :returns: DataFrame with columns ``datetime`` and the unit-specific
-            excess column (``p_excess_in`` or ``p_excess_mm``).
-        :rtype: pandas.DataFrame
+        :returns: Mapping with ``datetime`` and the unit-specific excess column.
+        :rtype: dict[str, numpy.ndarray]
         :raises RuntimeError: If :meth:`prepare` has not been called.
         """
         if self._prepared_df is None:
             raise RuntimeError("Call prepare(data) before predict().")
 
         self._sync_from_params()
-        df = self._prepared_df
-
-        diffs = df["datetime"].diff().dropna()
-        dt_hours = pd.Timedelta(diffs.median()).total_seconds() / 3600.0
-        dt_arr = np.full(len(df), dt_hours)
 
         excess = IAModel.compute_excess_series(
-            rainfall_mm=df[self._rainfall_col].to_numpy(dtype=float),
-            dt_hours=dt_arr,
-            temperature=df["temperature_c"].to_numpy(dtype=float),
+            rainfall_mm=self._rain_arr,
+            dt_hours=self._dt_arr,
+            temperature=self._temp_arr,
             ia_max=self.ia_max,
             k0=self.k0,
             kT=self.kT,
@@ -305,12 +316,18 @@ class IAModel(IModel):
             snow_T=self.snow_T if self._snow else None,
         )
 
-        result = pd.DataFrame({
-            "datetime": df["datetime"].values,
-            self._excess_col: excess,
-        })
         self._state = ModelState.PREDICTED
-        return result
+        return {"datetime": self._datetime_arr, self._excess_col: excess}
+
+    def predict(self) -> pd.DataFrame:
+        """Compute rainfall excess for the prepared time series.
+
+        :returns: DataFrame with columns ``datetime`` and the unit-specific
+            excess column (``p_excess_in`` or ``p_excess_mm``).
+        :rtype: pandas.DataFrame
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
+        return pd.DataFrame(self.predict_arrays())
 
     def finalize(self) -> None:
         """Release stored forcing data and advance to FINALIZED.
@@ -319,6 +336,10 @@ class IAModel(IModel):
         :rtype: None
         """
         self._prepared_df = None
+        self._dt_arr = None
+        self._rain_arr = None
+        self._temp_arr = None
+        self._datetime_arr = None
         self._state = ModelState.FINALIZED
 
     # ------------------------------------------------------------------

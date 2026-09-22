@@ -87,6 +87,7 @@ class SeasonalityModel(IModel):
     """
 
     model_name = "seasonality"
+    supports_array_predict = True
 
     def __init__(
         self,
@@ -214,11 +215,11 @@ class SeasonalityModel(IModel):
         self._month = (dt.dt.month - 1).to_numpy(dtype=int)
         self._state = ModelState.PREPARED
 
-    def predict(self) -> pd.DataFrame:
-        """Apply peaking factors and return the seasonal flow estimate.
+    def predict_arrays(self) -> dict[str, np.ndarray]:
+        """Apply peaking factors, returning plain arrays.
 
-        :returns: DataFrame with columns ``datetime`` and ``{output_name}``.
-        :rtype: pandas.DataFrame
+        :returns: Mapping with ``datetime`` and ``{output_name}``.
+        :rtype: dict[str, numpy.ndarray]
         """
         baseline = self.get_scalar_parameter("baseline").value
         active_dims = self._active_dims()
@@ -248,7 +249,15 @@ class SeasonalityModel(IModel):
         output = baseline * output
 
         self._state = ModelState.PREDICTED
-        return pd.DataFrame({"datetime": self._datetime, self._output_name: output})
+        return {"datetime": self._datetime, self._output_name: output}
+
+    def predict(self) -> pd.DataFrame:
+        """Apply peaking factors and return the seasonal flow estimate.
+
+        :returns: DataFrame with columns ``datetime`` and ``{output_name}``.
+        :rtype: pandas.DataFrame
+        """
+        return pd.DataFrame(self.predict_arrays())
 
     def finalize(self) -> None:
         """Release cached data and advance to FINALIZED."""

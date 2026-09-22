@@ -67,6 +67,7 @@ class AbstractionUHModel(IModel):
     """
 
     model_name: ClassVar[str] = "abstraction-uh"
+    supports_array_predict: ClassVar[bool] = True
 
     def __init__(
         self,
@@ -92,6 +93,11 @@ class AbstractionUHModel(IModel):
         self._abs_input: pd.DataFrame | None = None
         self._season_input: pd.DataFrame | None = None
         self._datetime: np.ndarray | None = None
+        #: Abstraction output column, resolved once in prepare().
+        self._exc_col: str | None = None
+        #: The UH's set_forcing, when it supports the array path; None means
+        #: fall back to rebuilding a DataFrame per predict().
+        self._uh_set_forcing = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -210,7 +216,72 @@ class AbstractionUHModel(IModel):
         self._abs_input = abs_input
         self._season_input = pd.DataFrame({"datetime": df["datetime"].values})
         self._datetime = df["datetime"].values
+
+        # Prepare the children once, here, rather than on every predict().
+        #
+        # This is safe because both abstraction models are pure over
+        # (prepared data, parameter values): IAModel.predict() re-syncs its
+        # parameters at its own top and routes through the *static*
+        # compute_excess_series() with all state passed explicitly, so its
+        # reset() has no bearing on predict; TankAbstractionModel.predict()
+        # likewise reads only _prepared_df and parameters.  The golden
+        # composite fixture pins that this holds.
+        self._abstraction.prepare(self._abs_input)
+        exc_names = [n for n in self._abstraction.output_field_names if n != "datetime"]
+        self._exc_col = exc_names[0] if exc_names else None
+
+        # Give the UH its time base once; predict() then swaps only the rainfall
+        # via set_forcing(), so no DataFrame is built per evaluation.
+        self._uh_set_forcing = getattr(self._uh, "set_forcing", None)
+        if self._uh_set_forcing is not None and hasattr(self._uh, "prepare_arrays"):
+            self._uh.prepare_arrays(
+                np.zeros(len(self._datetime)), self._datetime, dt_hours=None
+            )
+        else:
+            self._uh_set_forcing = None
+
+        if self._seasonality is not None:
+            self._seasonality.prepare(self._season_input)
+
         self._state = ModelState.PREPARED
+
+    def predict_arrays(self) -> dict[str, np.ndarray]:
+        """Run abstraction → UH (→ seasonality), returning plain arrays.
+
+        The children are prepared in :meth:`prepare`; this only pushes the
+        current parameter values down and re-runs them, so a calibration
+        evaluation builds no DataFrames at all.
+
+        :returns: Mapping with ``datetime`` and ``Q_pred``.
+        :rtype: dict[str, numpy.ndarray]
+        :raises RuntimeError: If :meth:`prepare` has not been called.
+        """
+        if self._abs_input is None:
+            raise RuntimeError("Call prepare(data) before predict().")
+        self._sync_children()
+
+        exc_arrays = self._abstraction.predict_arrays()
+        exc_col = self._exc_col
+        if exc_col is None or exc_col not in exc_arrays:
+            exc_col = next(c for c in exc_arrays if c != "datetime")
+        effective = np.asarray(exc_arrays[exc_col], dtype=float)
+
+        if self._uh_set_forcing is not None:
+            self._uh_set_forcing(effective)
+        else:
+            self._uh.prepare(
+                pd.DataFrame({"datetime": self._datetime, "rain": effective})
+            )
+        q = np.asarray(self._uh.predict_arrays()["Q_pred"], dtype=float)
+
+        if self._seasonality is not None and self._season_output is not None:
+            pf = np.asarray(
+                self._seasonality.predict_arrays()[self._season_output], dtype=float
+            )
+            q = q * pf
+
+        self._state = ModelState.PREDICTED
+        return {"datetime": self._datetime, "Q_pred": q}
 
     def predict(self) -> pd.DataFrame:
         """Run abstraction → UH (→ seasonality) and return predicted flow.
@@ -219,26 +290,7 @@ class AbstractionUHModel(IModel):
         :rtype: pandas.DataFrame
         :raises RuntimeError: If :meth:`prepare` has not been called.
         """
-        if self._abs_input is None:
-            raise RuntimeError("Call prepare(data) before predict().")
-        self._sync_children()
-
-        self._abstraction.prepare(self._abs_input)
-        exc_df = self._abstraction.predict()
-        exc_col = [c for c in exc_df.columns if c != "datetime"][0]
-        effective = exc_df[exc_col].to_numpy(dtype=float)
-
-        uh_input = pd.DataFrame({"datetime": self._datetime, "rain": effective})
-        self._uh.prepare(uh_input)
-        q = self._uh.predict()["Q_pred"].to_numpy(dtype=float)
-
-        if self._seasonality is not None and self._season_output is not None:
-            self._seasonality.prepare(self._season_input)
-            pf = self._seasonality.predict()[self._season_output].to_numpy(dtype=float)
-            q = q * pf
-
-        self._state = ModelState.PREDICTED
-        return pd.DataFrame({"datetime": self._datetime, "Q_pred": q})
+        return pd.DataFrame(self.predict_arrays())
 
     def finalize(self) -> None:
         """Finalize all child models and advance to FINALIZED.
