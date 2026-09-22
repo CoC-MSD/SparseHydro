@@ -16,9 +16,11 @@ sanctions:
     Step 5 replaces RDII's ``max(n, m) > 500`` FFT rule with an ``n * m`` cost
     heuristic, so RDII predictions shift at FFT round-off level.
 ``CAP_ACTIVE``
-    Step 6 caps kernels at ``MAX_STEPS``.  Cases listed in
-    :data:`tests.golden.cases.CAP_ACTIVE` exceed that cap today and therefore
-    change by design; every other case must stay bit-identical.
+    Step 6 capped kernels at ``MAX_STEPS``, which re-baselined the cases listed
+    in :data:`tests.golden.cases.CAP_ACTIVE` -- they exceeded the cap before.
+    Those fixtures have been regenerated and are pinned bit-for-bit again; the
+    list now only drives :func:`test_cap_active_kernels_are_finite_and_bounded`,
+    which asserts the invariant the cap establishes.
 
 If a fixture file is missing, the tests skip rather than fail -- a fresh
 checkout should not be blocked on running the generator first.
@@ -39,7 +41,8 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "golden"
 RDII_RTOL = 1e-9
 RDII_ATOL = 1e-12
 
-# Step 6: kernels that exceed MAX_STEPS today are re-baselined deliberately.
+# Cases whose kernels exceeded MAX_STEPS before Step 6 capped them.  Their
+# fixtures were re-baselined then; the list now drives the invariant test.
 CAP_ACTIVE = C.CAP_ACTIVE
 
 
@@ -98,17 +101,12 @@ def _is_rdii(key: str) -> bool:
     return key.startswith("RDIIModel/")
 
 
-def _is_cap_active(key: str) -> bool:
-    """Return ``True`` when *key* names a case whose kernel exceeds MAX_STEPS."""
-    return key.split("|", 1)[0] in CAP_ACTIVE
-
-
 # ---------------------------------------------------------------------------
 # Kernels
 # ---------------------------------------------------------------------------
 
 def test_kernels_pinned():
-    """Every UH kernel matches its pin bit-for-bit (cap-active cases excepted)."""
+    """Every UH kernel matches its pin bit-for-bit."""
     want = _load("kernels")
     checked = 0
     for case_id, model_name, params in C.iter_uh_cases():
@@ -116,8 +114,6 @@ def test_kernels_pinned():
             key = f"{case_id}|{dt_label}"
             if key not in want:
                 pytest.fail(f"fixture missing key {key!r}; regenerate the archive")
-            if _is_cap_active(key):
-                continue
             m = C.build(model_name, params)
             assert_bit_identical(m.get_kernel(dt), want[key], key)
             checked += 1
@@ -128,9 +124,10 @@ def test_kernels_pinned():
 def test_cap_active_kernels_are_finite_and_bounded(case_id):
     """Cap-active kernels stay finite, non-negative and within MAX_STEPS.
 
-    This is the invariant Step 6 establishes.  Before that step lands the
-    ``NashUH/overflow`` case is all-NaN and 250,001 elements long, so this test
-    is the one that flips from red to green when the cap is applied.
+    These are the parameter corners that used to break: ``NashUH/overflow``
+    built a 250,001-element all-NaN kernel that took ~125 ms to produce and
+    convolve, and which the optimiser could only read as the generic 1e12
+    penalty.  This asserts the invariant that makes that impossible.
     """
     max_steps = _max_steps()
     if max_steps is None:
@@ -195,8 +192,6 @@ def test_uh_predictions_pinned():
             key = f"{case_id}|n{n}"
             if key not in want:
                 pytest.fail(f"fixture missing key {key!r}; regenerate the archive")
-            if _is_cap_active(key):
-                continue
             m = C.build(model_name, params)
             m.prepare(df)
             got = m.predict()["Q_pred"].to_numpy(dtype=float)

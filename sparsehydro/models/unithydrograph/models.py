@@ -29,6 +29,8 @@ from ...parameters import ScalarParameter
 from .base import UnitHydrographBase
 from .kernels import (
     MAX_STEPS as _MAX_STEPS,
+    finalize_kernel,
+    kernel_errstate,
     infer_dt_hours as _infer_dt_hours,
     normalize_kernel as _normalize_kernel,
     trim_pad as _trim_pad,
@@ -97,10 +99,11 @@ class GammaUH(UnitHydrographBase):
         """
         tt = self._p("tt")
         tp = max(self._p("tp"), 1e-6)
-        max_steps = max(int(5 * tp + 1), 20)
+        max_steps = min(_MAX_STEPS, max(int(5 * tp + 1), 20))
         t = np.arange(1, max_steps + 1, dtype=float)
-        raw = np.maximum((t / tp) ** tt * np.exp(-t / tp), 0.0)
-        return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+        with kernel_errstate():
+            raw = np.maximum((t / tp) ** tt * np.exp(-t / tp), 0.0)
+        return finalize_kernel(raw, dt_hours, n_steps)
 
 
 # ---------------------------------------------------------------------------
@@ -151,12 +154,19 @@ class NashUH(UnitHydrographBase):
         """
         n_val = max(self._p("n"), 1e-6)
         k_val = max(self._p("k"), 1e-6)
-        max_steps = max(int(5 * n_val * k_val + 1), 20)
+        max_steps = min(_MAX_STEPS, max(int(5 * n_val * k_val + 1), 20))
         t = np.arange(1, max_steps + 1, dtype=float)
         eps = np.finfo(float).eps
-        denom = (k_val**n_val) * gamma_func(n_val)
-        raw = np.maximum((t**(n_val - 1)) * np.exp(-t / k_val) / max(denom, eps), 0.0)
-        return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+        with kernel_errstate():
+            denom = (k_val**n_val) * gamma_func(n_val)
+            # denom overflows to inf for large n and k (500**100 * gamma(100)),
+            # which would zero every ordinate.  It is a constant scale factor
+            # that finalize_kernel's normalisation divides out regardless, so
+            # dropping it when it is unusable changes nothing but the overflow.
+            if not np.isfinite(denom) or denom <= 0.0:
+                denom = 1.0
+            raw = np.maximum((t**(n_val - 1)) * np.exp(-t / k_val) / max(denom, eps), 0.0)
+        return finalize_kernel(raw, dt_hours, n_steps)
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +226,8 @@ class TriangleUH(UnitHydrographBase):
         tt_val = self._p("tt")
         tp_val = self._p("tp")
         if tp_val >= tt_val:
-            return _trim_pad(np.zeros(1), n_steps)
-        n = int(np.ceil(tt_val)) + 1
+            return finalize_kernel(np.zeros(1), dt_hours, n_steps)
+        n = min(_MAX_STEPS, int(np.ceil(tt_val)) + 1)
         t = np.arange(n, dtype=float)
         raw = np.zeros(n)
         rising = (t > 0) & (t <= tp_val)
@@ -225,7 +235,7 @@ class TriangleUH(UnitHydrographBase):
         falling = (t > tp_val) & (t <= tt_val)
         raw[falling] = 1.0 - (t[falling] - tp_val) / (tt_val - tp_val)
         raw = np.maximum(raw, 0.0)
-        return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+        return finalize_kernel(raw, dt_hours, n_steps)
 
 
 # ---------------------------------------------------------------------------
@@ -272,11 +282,11 @@ class RectangleUH(UnitHydrographBase):
         :rtype: numpy.ndarray
         """
         tr_val = max(self._p("tr"), 1e-6)
-        n = int(np.ceil(tr_val)) + 1
+        n = min(_MAX_STEPS, int(np.ceil(tr_val)) + 1)
         t = np.arange(n, dtype=float)
         raw = np.zeros(n)
         raw[(t > 0) & (t <= tr_val)] = 1.0
-        return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+        return finalize_kernel(raw, dt_hours, n_steps)
 
 
 # ---------------------------------------------------------------------------
@@ -325,11 +335,12 @@ class DecayUH(UnitHydrographBase):
         alpha = min(max(self._p("alpha"), 0.0), 1.0 - 1e-9)
         if alpha <= 0.0:
             raw = np.array([1.0])
-            return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+            return finalize_kernel(raw, dt_hours, n_steps)
         max_steps = min(_MAX_STEPS, max(int(np.log(1e-3) / np.log(alpha)) + 1, 20))
         t = np.arange(max_steps, dtype=float)
-        raw = np.maximum(alpha**t, 0.0)
-        return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+        with kernel_errstate():
+            raw = np.maximum(alpha**t, 0.0)
+        return finalize_kernel(raw, dt_hours, n_steps)
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +400,7 @@ class GammaDelayUH(UnitHydrographBase):
         max_steps = min(_MAX_STEPS, max(int(5 * tp + td + 1), 20))
         t = np.arange(1, max_steps + 1, dtype=float)
         ts = t - td
-        raw = np.where(ts > 0.0, (ts / tp) ** tt * np.exp(-ts / tp), 0.0)
-        raw = np.maximum(raw, 0.0)
-        return _trim_pad(_normalize_kernel(raw, dt_hours), n_steps)
+        with kernel_errstate():
+            raw = np.where(ts > 0.0, (ts / tp) ** tt * np.exp(-ts / tp), 0.0)
+            raw = np.maximum(raw, 0.0)
+        return finalize_kernel(raw, dt_hours, n_steps)

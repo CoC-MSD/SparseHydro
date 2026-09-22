@@ -25,6 +25,8 @@ from ...parameters import ScalarParameter
 from .base import UnitHydrographBase
 from .kernels import (
     MAX_STEPS as _MAX_STEPS,
+    finalize_kernel,
+    kernel_errstate,
     normalize_kernel as _normalize_kernel,
     trim_pad as _trim_pad,
 )
@@ -62,8 +64,9 @@ def _gamma_raw(tt: float, tp: float, ts: np.ndarray) -> np.ndarray:
     :returns: Non-negative gamma ordinates.
     :rtype: numpy.ndarray
     """
-    raw = np.where(ts > 0.0, (ts / tp) ** tt * np.exp(-ts / tp), 0.0)
-    return np.maximum(raw, 0.0)
+    with kernel_errstate():
+        raw = np.where(ts > 0.0, (ts / tp) ** tt * np.exp(-ts / tp), 0.0)
+        return np.maximum(raw, 0.0)
 
 
 class PeakTailUH(UnitHydrographBase):
@@ -157,8 +160,16 @@ class PeakTailUH(UnitHydrographBase):
         t = np.arange(max_steps, dtype=float)
         ts = t - td
 
-        peak_norm = _normalize_kernel(_triangle_raw(peak_tp, peak_tt, ts), dt_hours)
-        tail_norm = _normalize_kernel(_gamma_raw(tail_tt, tail_tp, ts), dt_hours)
+        # Each component is sanitised and normalised on its own, then blended.
+        # Normalising the *blend* instead would be a no-op mathematically -- two
+        # unit-area kernels weighted (1-w) and w already sum to unit area -- but
+        # would perturb the result at float level for no benefit.
+        #
+        # Sanitising matters here too: _gamma_raw evaluates (ts/tp) ** tt, which
+        # overflows to inf for small tp and large tt, and inf * exp(-ts/tp) is
+        # NaN.  Without this the whole kernel turns to NaN.
+        peak_norm = finalize_kernel(_triangle_raw(peak_tp, peak_tt, ts), dt_hours)
+        tail_norm = finalize_kernel(_gamma_raw(tail_tt, tail_tp, ts), dt_hours)
         return (1.0 - w) * peak_norm, w * tail_norm
 
     def get_kernel(self, dt_hours: float, n_steps: int | None = None) -> np.ndarray:
