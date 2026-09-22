@@ -29,6 +29,7 @@ import pandas as pd
 
 from ...enums import ModelState
 from ..base import IUnitHydroComponent
+from ..convolution import convolve_causal
 from .kernels import infer_dt_hours_from_values
 
 
@@ -204,7 +205,7 @@ class UnitHydrographBase(IUnitHydroComponent, ABC):
         kernel = self.get_kernel(dt_hours=dt)
         # Left-to-right exactly as the original `kernel * A * dt`: reassociating
         # to `kernel * (A * dt)` shifts results by ~1e-16 and breaks the pins.
-        q = np.convolve(self._rain, kernel * A * dt, mode="full")[: self._n]
+        q = convolve_causal(self._rain, kernel * A * dt, n_out=self._n)
         self._state = ModelState.PREDICTED
         return q
 

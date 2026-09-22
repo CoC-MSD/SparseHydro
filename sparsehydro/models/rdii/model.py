@@ -34,6 +34,7 @@ import pandas as pd
 
 from ...enums import ModelState
 from ..base import IModel, IUnitHydroComponent
+from ..convolution import convolve_causal
 from ...parameters import ConstraintRecord, FieldRecord, ScalarParameter
 from ...registry import registry
 from .initial_abstraction import IAModel
@@ -45,6 +46,9 @@ _DEFAULT_RTK = [
     (0.02, 72.0, 3.0),  # slow
 ]
 
+#: Deprecated.  Convolution algorithm selection moved to
+#: :mod:`sparsehydro.models.convolution`, which switches on the cost ``n * m``
+#: rather than ``max(n, m)``.  Retained so existing imports keep resolving.
 _FFT_THRESHOLD = 500
 _MM_AC_PER_HR_TO_CFS = 43560.0 / (304.8 * 3600.0)
 _IN_AC_PER_HR_TO_CFS = 43560.0 / (12.0 * 3600.0)
@@ -338,13 +342,7 @@ class RDIIModel(IModel):
         for i, uh in enumerate(self._uh_components, 1):
             R_i = self.get_scalar_parameter(f"R_{i}").value
             kernel = uh.get_kernel(self._dt_hours)
-            m = len(kernel)
-            if max(n, m) > _FFT_THRESHOLD:
-                from scipy.signal import fftconvolve  # type: ignore[import]
-                conv = fftconvolve(p_excess, kernel, mode="full")[:n]
-            else:
-                conv = np.convolve(p_excess, kernel, mode="full")[:n]
-            rdii += R_i * conv
+            rdii += R_i * convolve_causal(p_excess, kernel, n_out=n)
 
         rdii = np.clip(rdii, 0.0, None)
         area_acres = self.get_scalar_parameter("area_acres").value
@@ -393,11 +391,7 @@ class RDIIModel(IModel):
         for i, uh in enumerate(self._uh_components, 1):
             R_i = self.get_scalar_parameter(f"R_{i}").value
             kernel = uh.get_kernel(self._dt_hours)
-            if max(n, len(kernel)) > _FFT_THRESHOLD:
-                from scipy.signal import fftconvolve  # type: ignore[import]
-                conv = fftconvolve(p_excess, kernel, mode="full")[:n]
-            else:
-                conv = np.convolve(p_excess, kernel, mode="full")[:n]
+            conv = convolve_causal(p_excess, kernel, n_out=n)
             component_cfs = np.clip(R_i * conv, 0.0, None) * area_acres * self._depth_to_cfs
             out[f"rdii_component_{i}"] = component_cfs
             total += component_cfs

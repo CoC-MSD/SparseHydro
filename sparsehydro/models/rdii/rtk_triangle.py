@@ -28,7 +28,11 @@ import pandas as pd
 from ...enums import ModelState
 from ..base import IUnitHydroComponent
 from ...parameters import FieldRecord, ScalarParameter
+from ..convolution import convolve_causal
 
+#: Deprecated.  Convolution algorithm selection moved to
+#: :mod:`sparsehydro.models.convolution`, which switches on the cost ``n * m``
+#: rather than ``max(n, m)``.  Retained so existing imports keep resolving.
 _FFT_THRESHOLD = 500
 
 
@@ -166,11 +170,7 @@ class RTKTriangle(IUnitHydroComponent):
         kernel = triangular_uh(self, self._dt_hours)
         n = len(p_excess)
 
-        if max(n, len(kernel)) > _FFT_THRESHOLD:
-            from scipy.signal import fftconvolve  # type: ignore[import]
-            conv = fftconvolve(p_excess, kernel, mode="full")[:n]
-        else:
-            conv = np.convolve(p_excess, kernel, mode="full")[:n]
+        conv = convolve_causal(p_excess, kernel, n_out=n)
 
         rdii = np.clip(self.R * conv, 0.0, None)
         result = pd.DataFrame({

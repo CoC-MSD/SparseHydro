@@ -166,10 +166,29 @@ def _max_steps() -> int | None:
 # Predictions
 # ---------------------------------------------------------------------------
 
+def _uses_fft(n: int, kernel_len: int) -> bool:
+    """Return whether this (n, kernel) pair takes the FFT convolution branch.
+
+    Asked of the production heuristic rather than hard-coded, so the tolerance
+    tier follows the code instead of drifting away from it.
+    """
+    try:
+        from sparsehydro.models.convolution import convolution_method
+    except ImportError:
+        return False
+    return convolution_method(n, kernel_len) != "direct"
+
+
 def test_uh_predictions_pinned():
-    """Every UH ``predict()["Q_pred"]`` matches its pin bit-for-bit."""
+    """Every UH ``predict()["Q_pred"]`` matches its pin.
+
+    Bit-for-bit on the direct branch, which covers every event-scale window.
+    Cases large enough to take the FFT branch are allowed FFT round-off, and are
+    additionally checked for the non-negativity the clipping in
+    ``convolve_causal`` restores.
+    """
     want = _load("predictions")
-    checked = 0
+    checked = fft_cases = 0
     for n in C.PREDICT_LENGTHS:
         df = C.rain_series(n)
         for case_id, model_name, params in C.iter_uh_cases():
@@ -180,10 +199,25 @@ def test_uh_predictions_pinned():
                 continue
             m = C.build(model_name, params)
             m.prepare(df)
-            assert_bit_identical(m.predict()["Q_pred"].to_numpy(dtype=float),
-                                 want[key], key)
-            checked += 1
+            got = m.predict()["Q_pred"].to_numpy(dtype=float)
+
+            if _uses_fft(n, len(m.get_kernel(C.DT_CASES["5min"]))):
+                np.testing.assert_allclose(
+                    got, want[key], rtol=RDII_RTOL, atol=RDII_ATOL,
+                    err_msg=f"{key}: drifted beyond FFT round-off",
+                )
+                assert (got >= 0.0).all(), (
+                    f"{key}: FFT branch produced negative flow from non-negative "
+                    f"rainfall and kernel; the round-off clip is not being applied"
+                )
+                fft_cases += 1
+            else:
+                assert_bit_identical(got, want[key], key)
+                checked += 1
     assert checked > 0
+    # The n=5000 long-kernel cases must actually exercise the FFT branch,
+    # otherwise this test silently stops covering it.
+    assert fft_cases > 0
 
 
 def test_composite_predictions_pinned():
